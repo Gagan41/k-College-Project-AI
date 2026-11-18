@@ -1,16 +1,13 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo, Suspense } from "react";
+import { useSearchParams, useRouter } from "next/navigation";
 import {
   GraduationCap,
   Calendar,
   BarChart3,
-  ShieldAlert,
-  Mail,
-  AlertTriangle,
   CheckCircle2,
   Clock,
-  Send,
   RotateCw,
   Search,
   BookOpen,
@@ -20,878 +17,1135 @@ import {
   Layers,
   Sparkles,
   Camera,
-  ExternalLink,
+  Lock,
+  Unlock,
+  AlertCircle,
+  AlertTriangle,
+  Building,
+  Users,
+  MapPin,
+  CalendarDays,
+  Send,
+  UserCheck,
+  UserX,
+  ShieldCheck,
+  Cloud,
+  ChevronRight,
+  TrendingUp,
 } from "lucide-react";
 import Link from "next/link";
 import { API_BASE_URL, getAuthHeaders } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 
-// --- TYPES ---
-interface PeriodHeader {
-  period: number;
-  time: string;
-  subject: string;
-  subject_code: string;
-  teacher: string;
-  timetable_id: number;
-}
-
-interface DailyLedgerStudent {
-  student_id: number;
-  roll_number: string;
-  student_name: string;
-  periods: Record<string, string>; // "1": "PRESENT" | "ABSENT" | "NOT_RECORDED"
-  total_attended_today: number;
-}
-
-interface DailyLedgerResponse {
-  date: string;
-  section: string;
-  semester: number;
-  department: string;
-  classroom: string;
-  period_headers: PeriodHeader[];
-  students: DailyLedgerStudent[];
-}
-
-interface SubjectAttendanceStat {
-  subject_id: number;
-  subject_code: string;
-  subject_name: string;
-  classes_held: number;
-  classes_attended: number;
-  percentage: number;
-}
-
-interface StudentSubjectMatrixRow {
-  student_id: number;
-  roll_number: string;
-  student_name: string;
-  department: string;
-  section: string;
-  semester: number;
-  subjects: SubjectAttendanceStat[];
-  overall_held: number;
-  overall_attended: number;
-  overall_percentage: number;
-  has_shortage: boolean;
-}
-
-interface TimetableSlot {
+interface TeacherSlot {
   id: number;
   period_number: number;
   start_time: string;
   end_time: string;
+  subject_id: number;
   subject_code: string;
   subject_name: string;
   classroom: string;
   section: string;
-  faculty_name: string;
+  status: "ACTIVE_NOW" | "UPCOMING" | "COMPLETED" | "SCHEDULED";
+  is_active_now: boolean;
+  can_take_attendance: boolean;
+  lock_reason?: string | null;
 }
 
-interface WeeklyGridResponse {
-  days: string[];
-  grid: Record<string, TimetableSlot[]>;
-}
-
-interface DayByDayRecord {
-  session_id: number;
-  date: string;
-  time_slot: string;
-  classroom: string;
-  present_count: number;
-  absent_count: number;
-  left_early_count: number;
-  attendance_rate: number;
-  email_sent: boolean;
-}
-
-interface SecurityIncident {
-  id: number;
-  event_type: string;
-  camera_name: string;
-  classroom: string;
-  student_name: string;
+interface StudentRosterItem {
+  student_id: number;
   roll_number: string;
-  details: string;
-  photo_proof_path?: string | null;
-  timestamp: string;
+  full_name: string;
+  email: string;
+  section: string;
+  semester: number;
+  biometric_enrolled: boolean;
+  photo_url?: string | null;
+  status: "PRESENT" | "ABSENT" | "NOT_RECORDED" | string;
+  presence_ratio: number;
+  verification_method?: string | null;
+  minutes_present: number;
 }
 
-export default function TeacherPortalPage() {
+interface TeacherSubjectItem {
+  id: number;
+  code: string;
+  name: string;
+  department: string;
+  semester: number;
+  credits: number;
+  section: string;
+  classroom: string;
+  enrolled_students_count: number;
+  classes_held: number;
+}
+
+interface TeacherScheduleData {
+  cctv_camera?: {
+    id: number;
+    name: string;
+    classroom: string;
+    camera_type: string;
+    status: string;
+    stream_url: string;
+    snapshot_url: string;
+  } | null;
+  teacher: {
+    id: number;
+    name: string;
+    email: string;
+    employee_id: string;
+    department: string;
+    designation: string;
+    is_class_teacher: boolean;
+    class_teacher_section?: string | null;
+  };
+  current_time: string;
+  current_day: string;
+  current_date: string;
+  has_active_class_now: boolean;
+  active_class?: TeacherSlot | null;
+  next_class?: TeacherSlot | null;
+  displayed_class?: TeacherSlot | null;
+  today_schedule: TeacherSlot[];
+  student_roster: StudentRosterItem[];
+  weekly_grid: {
+    days: string[];
+    grid: Record<string, TeacherSlot[]>;
+  };
+  my_subjects: TeacherSubjectItem[];
+}
+
+function TeacherPortalContent() {
+  const searchParams = useSearchParams();
+  const router = useRouter();
   const { user, token } = useAuth();
-  const [activeTab, setActiveTab] = useState<
-    "class_teacher_ledger" | "subject_matrix" | "weekly_timetable" | "faculty_sessions" | "incidents"
-  >("class_teacher_ledger");
 
-  // Filter states
-  const [selectedSection, setSelectedSection] = useState<string>("B");
-  const [selectedDate, setSelectedDate] = useState<string>(() => {
-    return new Date().toISOString().split("T")[0];
-  });
-  const [searchTerm, setSearchTerm] = useState("");
+  // Active tab state
+  type TabType = "live_attendance" | "weekly_timetable" | "subject_matrix" | "today_timeline";
+  const initialTab = (searchParams.get("tab") as TabType) || "live_attendance";
+  const [activeTab, setActiveTab] = useState<TabType>(
+    initialTab === ("class_teacher_ledger" as any) ? "live_attendance" : initialTab
+  );
+
+  // Sync tab with URL
+  useEffect(() => {
+    const tabParam = searchParams.get("tab");
+    if (tabParam) {
+      if (tabParam === "class_teacher_ledger") {
+        setActiveTab("live_attendance");
+      } else if (["live_attendance", "weekly_timetable", "subject_matrix", "today_timeline"].includes(tabParam)) {
+        setActiveTab(tabParam as TabType);
+      }
+    }
+  }, [searchParams]);
+
+  const switchTab = (tab: TabType) => {
+    setActiveTab(tab);
+    router.replace(`/teacher?tab=${tab}`);
+  };
+
+  // Live real-time clock
+  const [currentTime, setCurrentTime] = useState<string>("");
+  useEffect(() => {
+    const updateTime = () => {
+      const now = new Date();
+      setCurrentTime(
+        now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })
+      );
+    };
+    updateTime();
+    const interval = setInterval(updateTime, 1000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Main Teacher Data state
+  const [data, setData] = useState<TeacherScheduleData | null>(null);
   const [loading, setLoading] = useState(true);
-  const [feedback, setFeedback] = useState<string | null>(null);
+  const [selectedSlotId, setSelectedSlotId] = useState<number | null>(null);
+  const [searchStudent, setSearchStudent] = useState("");
+  const [actionFeedback, setActionFeedback] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [updatingStudentId, setUpdatingStudentId] = useState<number | null>(null);
 
-  // Data states
-  const [teacherName, setTeacherName] = useState("");
-  const [teacherEmail, setTeacherEmail] = useState("");
-  const [activeSections, setActiveSections] = useState<string[]>(["B"]);
-
-  // Daily Ledger
-  const [dailyLedger, setDailyLedger] = useState<DailyLedgerResponse | null>(null);
-  const [ledgerLoading, setLedgerLoading] = useState(false);
-
-  // Subject Wise Matrix
-  const [subjectMatrix, setSubjectMatrix] = useState<StudentSubjectMatrixRow[]>([]);
-  const [matrixLoading, setMatrixLoading] = useState(false);
-
-  // Weekly Timetable
-  const [weeklyGrid, setWeeklyGrid] = useState<WeeklyGridResponse | null>(null);
-  const [timetableLoading, setTimetableLoading] = useState(false);
-
-  // Faculty course sessions & incidents
-  const [recentSessions, setRecentSessions] = useState<DayByDayRecord[]>([]);
-  const [incidents, setIncidents] = useState<SecurityIncident[]>([]);
-
-  // 1. Initial Profile & Session loading
-  const loadProfileAndSessions = async () => {
+  // Load teacher schedule & roster
+  const loadTeacherData = async (slotId?: number | null) => {
     try {
       setLoading(true);
-      const headers = getAuthHeaders(token);
-
-      const [resStats, resIncidents] = await Promise.all([
-        fetch(`${API_BASE_URL}/timetable/teacher-stats`, { headers }),
-        fetch(`${API_BASE_URL}/timetable/incidents`, { headers }),
-      ]);
-
-      if (resStats.ok) {
-        const data = await resStats.json();
-        setTeacherName(data.teacher_name || user?.full_name || "Faculty");
-        setTeacherEmail(data.teacher_email || user?.email || "");
-        if (data.active_sections && data.active_sections.length > 0) {
-          setActiveSections(data.active_sections);
+      const url = slotId
+        ? `${API_BASE_URL}/timetable/teacher/my-schedule?selected_timetable_id=${slotId}`
+        : `${API_BASE_URL}/timetable/teacher/my-schedule`;
+      const res = await fetch(url, { headers: getAuthHeaders(token) });
+      if (res.ok) {
+        const json: TeacherScheduleData = await res.json();
+        setData(json);
+        if (json.displayed_class && !slotId) {
+          setSelectedSlotId(json.displayed_class.id);
         }
-        setRecentSessions(data.recent_sessions || []);
+      } else {
+        const err = await res.json();
+        setActionFeedback({ type: "error", text: err.detail || "Failed to load teacher schedule." });
       }
-
-      if (resIncidents.ok) {
-        setIncidents(await resIncidents.json());
-      }
-    } catch (err) {
-      console.error("Failed to load teacher stats", err);
+    } catch (err: unknown) {
+      setActionFeedback({
+        type: "error",
+        text: err instanceof Error ? err.message : "Error connecting to server.",
+      });
     } finally {
       setLoading(false);
     }
   };
 
-  // 2. Fetch Class Teacher Daily Ledger
-  const fetchDailyLedger = async (section: string, date: string) => {
-    try {
-      setLedgerLoading(true);
-      const res = await fetch(
-        `${API_BASE_URL}/timetable/class-teacher/daily-ledger?section=${encodeURIComponent(section)}&date=${encodeURIComponent(date)}`,
-        { headers: getAuthHeaders(token) }
-      );
-      if (res.ok) {
-        const data = await res.json();
-        setDailyLedger(data);
-      }
-    } catch (err) {
-      console.error("Failed to load daily ledger", err);
-    } finally {
-      setLedgerLoading(false);
-    }
-  };
-
-  // 3. Fetch Subject-Wise Matrix
-  const fetchSubjectMatrix = async (section: string) => {
-    try {
-      setMatrixLoading(true);
-      const res = await fetch(
-        `${API_BASE_URL}/timetable/class-teacher/subject-wise-matrix?section=${encodeURIComponent(section)}`,
-        { headers: getAuthHeaders(token) }
-      );
-      if (res.ok) {
-        const data = await res.json();
-        setSubjectMatrix(data);
-      }
-    } catch (err) {
-      console.error("Failed to load subject matrix", err);
-    } finally {
-      setMatrixLoading(false);
-    }
-  };
-
-  // 4. Fetch Weekly Timetable Grid
-  const fetchWeeklyGrid = async (section: string) => {
-    try {
-      setTimetableLoading(true);
-      const res = await fetch(
-        `${API_BASE_URL}/timetable/weekly-grid?section=${encodeURIComponent(section)}`,
-        { headers: getAuthHeaders(token) }
-      );
-      if (res.ok) {
-        const data = await res.json();
-        setWeeklyGrid(data);
-      }
-    } catch (err) {
-      console.error("Failed to load weekly grid", err);
-    } finally {
-      setTimetableLoading(false);
-    }
-  };
-
   useEffect(() => {
-    loadProfileAndSessions();
-  }, [token]);
-
-  useEffect(() => {
-    if (activeTab === "class_teacher_ledger") {
-      fetchDailyLedger(selectedSection, selectedDate);
-    } else if (activeTab === "subject_matrix") {
-      fetchSubjectMatrix(selectedSection);
-    } else if (activeTab === "weekly_timetable") {
-      fetchWeeklyGrid(selectedSection);
+    if (token) {
+      loadTeacherData(selectedSlotId);
     }
-  }, [activeTab, selectedSection, selectedDate, token]);
+  }, [token, selectedSlotId]);
 
-  const handleSendEmailReport = async (sessionId: number) => {
-    try {
-      const res = await fetch(`${API_BASE_URL}/timetable/sessions/${sessionId}/send-email`, {
-        method: "POST",
-        headers: getAuthHeaders(token),
+  // Handle Manual Attendance Mark / Toggle
+  const handleToggleStatus = async (studentId: number, currentStatus: string) => {
+    const activeSlot = data?.displayed_class;
+    if (!activeSlot) return;
+
+    if (!activeSlot.can_take_attendance && user?.role === "FACULTY") {
+      setActionFeedback({
+        type: "error",
+        text: activeSlot.lock_reason || "Attendance taking is locked outside class schedule.",
       });
-      const data = await res.json();
+      return;
+    }
+
+    const nextStatus = currentStatus === "PRESENT" ? "ABSENT" : "PRESENT";
+    setUpdatingStudentId(studentId);
+    try {
+      const res = await fetch(`${API_BASE_URL}/timetable/teacher/mark-manual-status`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...getAuthHeaders(token) },
+        body: JSON.stringify({
+          timetable_id: activeSlot.id,
+          student_id: studentId,
+          status: nextStatus,
+        }),
+      });
       if (res.ok) {
-        setFeedback(`Official attendance ledger dispatched via SMTP to ${data.teacher_email}`);
-        loadProfileAndSessions();
+        // Optimistically update roster
+        setData((prev) => {
+          if (!prev) return prev;
+          return {
+            ...prev,
+            student_roster: prev.student_roster.map((s) =>
+              s.student_id === studentId
+                ? {
+                    ...s,
+                    status: nextStatus,
+                    presence_ratio: nextStatus === "PRESENT" ? 1.0 : 0.0,
+                    minutes_present: nextStatus === "PRESENT" ? 60 : 0,
+                  }
+                : s
+            ),
+          };
+        });
+        setActionFeedback({ type: "success", text: `Updated student status to ${nextStatus}.` });
+      } else {
+        const err = await res.json();
+        setActionFeedback({ type: "error", text: err.detail || "Failed to update status." });
       }
-    } catch (err) {
-      console.error("Failed to send email", err);
+    } catch (err: unknown) {
+      setActionFeedback({
+        type: "error",
+        text: err instanceof Error ? err.message : "Network error.",
+      });
+    } finally {
+      setUpdatingStudentId(null);
     }
   };
 
-  // Filtered lists for search
-  const filteredDailyStudents = (dailyLedger?.students || []).filter(
-    (s) =>
-      s.student_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      s.roll_number.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  // CCTV Scanning State
+  const [isScanningCCTV, setIsScanningCCTV] = useState(false);
+  const [cctvScanResult, setCctvScanResult] = useState<{
+    detected_faces: number;
+    recognized_count: number;
+    message: string;
+  } | null>(null);
 
-  const filteredMatrix = subjectMatrix.filter(
-    (s) =>
-      s.student_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      s.roll_number.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  // Take Attendance from Classroom CCTV Feed via YuNet Face Detection + SFace Biometrics
+  const handleScanCCTVAttendance = async () => {
+    const activeSlot = data?.displayed_class;
+    if (!activeSlot) return;
 
-  // Distinct subjects in matrix for header
-  const matrixSubjects =
-    subjectMatrix.length > 0 && subjectMatrix[0].subjects
-      ? subjectMatrix[0].subjects.map((sub) => ({
-          code: sub.subject_code,
-          name: sub.subject_name,
-        }))
-      : [];
+    if (!activeSlot.can_take_attendance && user?.role === "FACULTY") {
+      setActionFeedback({
+        type: "error",
+        text: activeSlot.lock_reason || "Attendance taking is locked outside class schedule.",
+      });
+      return;
+    }
+
+    setIsScanningCCTV(true);
+    setCctvScanResult(null);
+    setActionFeedback(null);
+
+    try {
+      const res = await fetch(`${API_BASE_URL}/timetable/teacher/scan-cctv-attendance`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...getAuthHeaders(token) },
+        body: JSON.stringify({
+          timetable_id: activeSlot.id,
+        }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.detail || "CCTV attendance scan failed.");
+      }
+
+      const result = await res.json();
+      setCctvScanResult({
+        detected_faces: result.detected_faces_in_cctv,
+        recognized_count: result.recognized_students_count,
+        message: result.message,
+      });
+
+      // Refresh schedule and roster data so marked students update immediately
+      await loadTeacherData(activeSlot.id);
+
+      setActionFeedback({
+        type: "success",
+        text: result.message || `CCTV scan complete: ${result.recognized_students_count} students marked Present.`,
+      });
+    } catch (err: unknown) {
+      setActionFeedback({
+        type: "error",
+        text: err instanceof Error ? err.message : "Failed to scan CCTV feed.",
+      });
+    } finally {
+      setIsScanningCCTV(false);
+    }
+  };
+
+  // Filter students by search term
+  const filteredRoster = useMemo(() => {
+    if (!data?.student_roster) return [];
+    if (!searchStudent.trim()) return data.student_roster;
+    const q = searchStudent.toLowerCase();
+    return data.student_roster.filter(
+      (s) =>
+        s.full_name.toLowerCase().includes(q) ||
+        s.roll_number.toLowerCase().includes(q) ||
+        (s.section && s.section.toLowerCase().includes(q))
+    );
+  }, [data?.student_roster, searchStudent]);
+
+  // Attendance stats for current slot
+  const currentSlotStats = useMemo(() => {
+    const roster = data?.student_roster || [];
+    const total = roster.length;
+    const present = roster.filter((s) => s.status === "PRESENT").length;
+    const absent = roster.filter((s) => s.status === "ABSENT").length;
+    const unrecorded = roster.filter((s) => s.status === "NOT_RECORDED" || !s.status).length;
+    const rate = total > 0 ? Math.round((present / total) * 100) : 0;
+    return { total, present, absent, unrecorded, rate };
+  }, [data?.student_roster]);
+
+  const displayedSlot = data?.displayed_class;
 
   return (
-    <div className="space-y-6">
-      {/* Top Profile Banner */}
-      <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm relative overflow-hidden">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-          <div className="flex items-center gap-4">
-            <div className="w-14 h-14 rounded-2xl bg-blue-50 border border-blue-100 flex items-center justify-center text-blue-600 shadow-sm">
-              <GraduationCap className="w-7 h-7" />
-            </div>
+    <div className="space-y-6 max-w-7xl mx-auto pb-12">
+      {/* Top Teacher Workspace Header */}
+      <div className="bg-white border border-slate-200/90 rounded-3xl p-6 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div>
+          <div className="flex items-center gap-2">
+            <span className="p-2 rounded-xl bg-blue-50 text-blue-600 border border-blue-100">
+              <GraduationCap className="w-5 h-5" />
+            </span>
             <div>
-              <div className="flex items-center gap-2">
-                <span className="text-[11px] uppercase tracking-wider text-blue-600 font-bold">
-                  Class Teacher &amp; Faculty Portal
-                </span>
-                <span className="px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 text-[10px] font-semibold border border-emerald-200">
-                  Assigned: Section {selectedSection}
-                </span>
+              <h1 className="text-xl font-bold text-slate-900 tracking-tight flex items-center gap-2">
+                <span>Faculty Attendance Workspace</span>
+                {data?.teacher && (
+                  <span className="text-xs font-mono font-bold text-blue-700 bg-blue-50 px-2.5 py-0.5 rounded-full border border-blue-200">
+                    {data.teacher.name}
+                  </span>
+                )}
+              </h1>
+              <p className="text-xs text-slate-500 mt-0.5">
+                {data?.teacher.department} &bull; {data?.teacher.designation || "Assistant Professor"} &bull;{" "}
+                <span className="font-mono text-slate-600">{data?.teacher.employee_id}</span>
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {/* Live Wall-Clock & Today's Date */}
+        <div className="flex items-center gap-3">
+          <div className="bg-slate-50 border border-slate-200 px-3.5 py-2 rounded-2xl flex items-center gap-2.5">
+            <Clock className="w-4 h-4 text-blue-600 animate-pulse" />
+            <div className="text-right">
+              <div className="font-mono font-bold text-xs text-slate-900">{currentTime || "..."}</div>
+              <div className="text-[10px] text-slate-500 font-semibold">
+                {data?.current_day}, {data?.current_date}
               </div>
-              <h1 className="text-xl font-bold text-slate-900">{teacherName || user?.full_name || "Dr. Alan Turing"}</h1>
-              <p className="text-xs text-slate-500 font-mono">{teacherEmail || user?.email || "faculty@smartattend.edu"}</p>
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-3">
-            <div className="px-4 py-2 rounded-xl bg-slate-50 border border-slate-200 text-center">
-              <div className="text-[10px] text-slate-500 uppercase font-semibold">Assigned Cohort</div>
-              <div className="text-sm font-bold text-slate-900">Sem 7 - Sec {selectedSection}</div>
-            </div>
-            <Link
-              href="/cctv"
-              className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs transition shadow-sm"
-            >
-              <Camera className="w-4 h-4" />
-              Open In-Classroom CCTV
-            </Link>
-          </div>
+          <button
+            onClick={() => loadTeacherData(selectedSlotId)}
+            className="p-2.5 rounded-2xl bg-white border border-slate-200 hover:bg-slate-50 text-slate-600 hover:text-slate-900 transition shadow-xs cursor-pointer"
+            title="Refresh Schedule & Attendance"
+          >
+            <RotateCw className={`w-4 h-4 ${loading ? "animate-spin text-blue-600" : ""}`} />
+          </button>
         </div>
       </div>
 
-      {feedback && (
-        <div className="p-4 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-            <span>{feedback}</span>
+      {/* 4 Main Tabs */}
+      <div className="flex items-center p-1 bg-slate-100/90 rounded-2xl border border-slate-200 text-xs gap-1 max-w-fit">
+        {[
+          { id: "live_attendance", label: "Live Class Attendance", icon: CheckCircle2 },
+          { id: "weekly_timetable", label: "My Weekly Timetable", icon: CalendarDays },
+          { id: "subject_matrix", label: "My Subjects & Students", icon: BookOpen },
+          { id: "today_timeline", label: "Today's Schedule", icon: Clock },
+        ].map((tab) => {
+          const Icon = tab.icon;
+          const isCurrent = activeTab === tab.id;
+          return (
+            <button
+              key={tab.id}
+              onClick={() => switchTab(tab.id as TabType)}
+              className={`flex items-center gap-2 px-4 py-2 rounded-xl font-bold transition cursor-pointer ${
+                isCurrent
+                  ? "bg-white text-blue-700 shadow-xs border border-blue-200"
+                  : "text-slate-600 hover:text-slate-900"
+              }`}
+            >
+              <Icon className="w-4 h-4 text-blue-600" />
+              <span>{tab.label}</span>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Banner / Feedback */}
+      {actionFeedback && (
+        <div
+          className={`p-4 rounded-2xl border text-xs flex items-center justify-between shadow-xs ${
+            actionFeedback.type === "success"
+              ? "bg-emerald-50 border-emerald-200 text-emerald-900"
+              : "bg-rose-50 border-rose-200 text-rose-900"
+          }`}
+        >
+          <div className="flex items-center gap-2.5">
+            {actionFeedback.type === "success" ? (
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+            ) : (
+              <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+            )}
+            <span className="font-semibold">{actionFeedback.text}</span>
           </div>
-          <button onClick={() => setFeedback(null)} className="text-slate-400 hover:text-slate-700 text-xs">
+          <button
+            onClick={() => setActionFeedback(null)}
+            className="text-slate-400 hover:text-slate-700 text-xs cursor-pointer"
+          >
             <X className="w-4 h-4" />
           </button>
         </div>
       )}
 
-      {/* Navigation Tabs */}
-      <div className="flex flex-wrap items-center gap-2 border-b border-slate-200 pb-3">
-        <button
-          onClick={() => setActiveTab("class_teacher_ledger")}
-          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold transition cursor-pointer ${
-            activeTab === "class_teacher_ledger"
-              ? "bg-blue-600 text-white shadow-sm"
-              : "text-slate-600 bg-white border border-slate-200 hover:bg-slate-50 hover:text-slate-900"
-          }`}
-        >
-          <Calendar className="w-4 h-4" />
-          Class Teacher Daily Ledger (P1 - P6)
-        </button>
+      {/* =========================================================================
+          TAB 1: LIVE CLASS ATTENDANCE (STRICT TIME-LOCKING LOGIC)
+      ========================================================================= */}
+      {activeTab === "live_attendance" && (
+        <div className="space-y-6">
+          {/* Active / Selected Class Card with Time-Lock Indicator */}
+          {displayedSlot ? (
+            <div
+              className={`rounded-3xl border p-6 shadow-xs transition-all ${
+                displayedSlot.can_take_attendance
+                  ? "bg-gradient-to-r from-emerald-500/10 via-teal-500/5 to-white border-emerald-300 ring-2 ring-emerald-500/20"
+                  : "bg-white border-slate-200"
+              }`}
+            >
+              <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2">
+                    {displayedSlot.can_take_attendance ? (
+                      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-600 text-white font-bold text-xs shadow-xs animate-pulse">
+                        <span className="w-2 h-2 rounded-full bg-white animate-ping" />
+                        <span>LIVE CLASS IN PROGRESS</span>
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-100 text-slate-700 font-bold text-xs border border-slate-200">
+                        <Lock className="w-3.5 h-3.5 text-slate-500" />
+                        <span>ATTENDANCE TAKING LOCKED</span>
+                      </span>
+                    )}
 
-        <button
-          onClick={() => setActiveTab("subject_matrix")}
-          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold transition cursor-pointer ${
-            activeTab === "subject_matrix"
-              ? "bg-blue-600 text-white shadow-sm"
-              : "text-slate-600 bg-white border border-slate-200 hover:bg-slate-50 hover:text-slate-900"
-          }`}
-        >
-          <BarChart3 className="w-4 h-4" />
-          Overall Subject-Wise Matrix (% & Shortage)
-        </button>
+                    <span className="font-mono text-xs font-bold text-blue-700 bg-blue-50 border border-blue-200 px-2.5 py-0.5 rounded-lg">
+                      Period {displayedSlot.period_number}
+                    </span>
 
-        <button
-          onClick={() => setActiveTab("weekly_timetable")}
-          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold transition cursor-pointer ${
-            activeTab === "weekly_timetable"
-              ? "bg-blue-600 text-white shadow-sm"
-              : "text-slate-600 bg-white border border-slate-200 hover:bg-slate-50 hover:text-slate-900"
-          }`}
-        >
-          <Clock className="w-4 h-4" />
-          Weekly Class Timetable
-        </button>
+                    <span className="font-mono text-xs font-bold text-slate-700 bg-slate-100 px-2.5 py-0.5 rounded-lg">
+                      {displayedSlot.start_time} - {displayedSlot.end_time}
+                    </span>
+                  </div>
 
-        <button
-          onClick={() => setActiveTab("faculty_sessions")}
-          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold transition cursor-pointer ${
-            activeTab === "faculty_sessions"
-              ? "bg-blue-600 text-white shadow-sm"
-              : "text-slate-600 bg-white border border-slate-200 hover:bg-slate-50 hover:text-slate-900"
-          }`}
-        >
-          <BookOpen className="w-4 h-4" />
-          Subject Faculty Sessions & Email
-        </button>
+                  <div>
+                    <h2 className="text-xl font-bold text-slate-900 tracking-tight flex items-center gap-2">
+                      <span>{displayedSlot.subject_name}</span>
+                      <span className="text-xs font-mono font-semibold text-slate-500">
+                        ({displayedSlot.subject_code})
+                      </span>
+                    </h2>
+                    <p className="text-xs text-slate-600 mt-1 flex items-center gap-3">
+                      <span className="flex items-center gap-1">
+                        <MapPin className="w-3.5 h-3.5 text-rose-500" />
+                        <span className="font-bold text-slate-800">{displayedSlot.classroom}</span>
+                      </span>
+                      <span>&bull;</span>
+                      <span>
+                        Section: <strong className="text-slate-800">{displayedSlot.section}</strong>
+                      </span>
+                    </p>
+                  </div>
 
-        <button
-          onClick={() => setActiveTab("incidents")}
-          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold transition cursor-pointer ${
-            activeTab === "incidents"
-              ? "bg-rose-600 text-white shadow-sm"
-              : "text-slate-600 bg-white border border-slate-200 hover:bg-rose-50 hover:text-rose-700"
-          }`}
-        >
-          <ShieldAlert className="w-4 h-4" />
-          Occluded Face Exits ({incidents.length})
-        </button>
-      </div>
-
-      {/* Global Filter Bar for Ledger & Matrix */}
-      {(activeTab === "class_teacher_ledger" || activeTab === "subject_matrix" || activeTab === "weekly_timetable") && (
-        <div className="flex flex-wrap items-center justify-between gap-4 p-4 rounded-2xl border border-slate-200/90 bg-white shadow-xs">
-          <div className="flex flex-wrap items-center gap-4">
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-slate-500 font-semibold">Section:</span>
-              <select
-                value={selectedSection}
-                onChange={(e) => setSelectedSection(e.target.value)}
-                className="px-3.5 py-2 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-800 font-bold focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition cursor-pointer"
-              >
-                <option value="B">Section B (Assigned Class)</option>
-                <option value="A">Section A</option>
-                <option value="C">Section C</option>
-              </select>
-            </div>
-
-            {activeTab === "class_teacher_ledger" && (
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-slate-500 font-semibold">Date:</span>
-                <input
-                  type="date"
-                  value={selectedDate}
-                  onChange={(e) => setSelectedDate(e.target.value)}
-                  className="px-3.5 py-2 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-800 font-semibold font-mono focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition cursor-pointer"
-                />
-              </div>
-            )}
-          </div>
-
-          {(activeTab === "class_teacher_ledger" || activeTab === "subject_matrix") && (
-            <div className="relative min-w-[240px]">
-              <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
-              <input
-                type="text"
-                placeholder="Search roll or student name..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                className="w-full pl-10 pr-4 py-2 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:bg-white focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition"
-              />
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* TAB 1: Class Teacher All-Periods Ledger */}
-      {activeTab === "class_teacher_ledger" && (
-        <div className="rounded-2xl border border-slate-200/90 bg-white shadow-xs overflow-hidden">
-          <div className="p-5 border-b border-slate-100 bg-slate-50/50 flex flex-col md:flex-row md:items-center justify-between gap-3">
-            <div>
-              <div className="flex items-center gap-2">
-                <h2 className="text-sm font-bold text-slate-900">
-                  Section {selectedSection} Complete Daily Period Ledger
-                </h2>
-                <span className="px-2.5 py-0.5 rounded-md text-[10px] font-mono font-bold bg-blue-50 text-blue-700 border border-blue-200">
-                  {selectedDate}
-                </span>
-              </div>
-              <p className="text-xs text-slate-500 mt-1">
-                Full period-by-period matrix (Period 1 to 6) recorded automatically via In-Classroom AI Camera & Barcode Scanner.
-              </p>
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-slate-500 font-medium">Classroom:</span>
-              <span className="px-3 py-1 rounded-xl bg-white border border-slate-200 text-xs font-mono font-bold text-slate-800 shadow-2xs">
-                {dailyLedger?.classroom || "Room 302"}
-              </span>
-            </div>
-          </div>
-
-          {ledgerLoading ? (
-            <div className="p-12 text-center text-slate-500 text-xs flex items-center justify-center gap-2">
-              <RotateCw className="w-4 h-4 animate-spin text-blue-600" />
-              Loading Section {selectedSection} Ledger...
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs">
-                <thead className="bg-slate-50 text-slate-600 uppercase text-[10px] tracking-wider border-b border-slate-200 font-bold">
-                  <tr>
-                    <th className="px-5 py-3.5">#</th>
-                    <th className="px-5 py-3.5">Roll No</th>
-                    <th className="px-5 py-3.5">Student Name</th>
-                    {dailyLedger?.period_headers.map((hdr) => (
-                      <th key={hdr.period} className="px-4 py-3.5 text-center border-l border-slate-200/70">
-                        <div className="font-bold text-slate-900">P{hdr.period}</div>
-                        <div className="text-[9px] text-blue-600 font-semibold lowercase">{hdr.time}</div>
-                        <div className="text-[9px] text-slate-500 font-mono font-medium">{hdr.subject_code}</div>
-                      </th>
-                    ))}
-                    <th className="px-5 py-3.5 text-center border-l border-slate-200/70">Day Total</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {filteredDailyStudents.map((st, idx) => (
-                    <tr key={st.student_id} className="hover:bg-blue-50/30 transition">
-                      <td className="px-5 py-3.5 text-slate-400 font-mono">{idx + 1}</td>
-                      <td className="px-5 py-3.5 font-mono font-bold text-slate-800">{st.roll_number}</td>
-                      <td className="px-5 py-3.5 font-semibold text-slate-900">{st.student_name}</td>
-
-                      {dailyLedger?.period_headers.map((hdr) => {
-                        const status = st.periods[String(hdr.period)] || "NOT_RECORDED";
-                        const isPresent = status === "PRESENT";
-                        const isAbsent = status === "ABSENT";
-
-                        return (
-                          <td
-                            key={hdr.period}
-                            className="px-4 py-3.5 text-center border-l border-slate-100"
-                          >
-                            {isPresent ? (
-                              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold font-mono bg-emerald-50 text-emerald-700 border border-emerald-200">
-                                <Check className="w-3 h-3 text-emerald-600" />
-                                PRES
-                              </span>
-                            ) : isAbsent ? (
-                              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold font-mono bg-rose-50 text-rose-700 border border-rose-200">
-                                <X className="w-3 h-3 text-rose-600" />
-                                ABS
-                              </span>
-                            ) : (
-                              <span className="text-[10px] text-slate-300 font-mono font-bold">—</span>
-                            )}
-                          </td>
-                        );
-                      })}
-
-                      <td className="px-5 py-3.5 text-center border-l border-slate-100 font-mono font-bold">
-                        <span className="text-emerald-700 font-bold">{st.total_attended_today}</span>
-                        <span className="text-slate-400"> / {dailyLedger?.period_headers.length || 6}</span>
-                      </td>
-                    </tr>
-                  ))}
-
-                  {filteredDailyStudents.length === 0 && (
-                    <tr>
-                      <td
-                        colSpan={(dailyLedger?.period_headers.length || 0) + 4}
-                        className="px-5 py-12 text-center text-slate-400 bg-slate-50/40 text-xs font-medium"
-                      >
-                        No attendance records for Section {selectedSection} on {selectedDate}.
-                      </td>
-                    </tr>
+                  {/* Lock Notice or Live Notice */}
+                  {!displayedSlot.can_take_attendance ? (
+                    <div className="p-3 bg-amber-50/80 border border-amber-200 rounded-2xl text-xs text-amber-900 flex items-start gap-2.5 max-w-2xl">
+                      <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                      <div>
+                        <p className="font-bold">Attendance Locked Outside Scheduled Hours</p>
+                        <p className="text-[11px] text-amber-800 mt-0.5">
+                          {displayedSlot.lock_reason ||
+                            `You can only take attendance for ${displayedSlot.subject_name} in ${displayedSlot.classroom} during its scheduled period (${displayedSlot.start_time} - ${displayedSlot.end_time}).`}
+                        </p>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="p-3 bg-emerald-50/80 border border-emerald-200 rounded-2xl text-xs text-emerald-900 flex items-start gap-2.5 max-w-2xl">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                      <div>
+                        <p className="font-bold">Active Scheduled Period &bull; Attendance Open</p>
+                        <p className="text-[11px] text-emerald-700 mt-0.5">
+                          CCTV sensor in {displayedSlot.classroom} is actively streaming and verifying students.
+                          You may verify student biometric records or apply manual marks below.
+                        </p>
+                      </div>
+                    </div>
                   )}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-      )}
+                </div>
 
-      {/* TAB 2: Overall Subject-Wise Matrix */}
-      {activeTab === "subject_matrix" && (
-        <div className="rounded-2xl border border-slate-200/90 bg-white shadow-xs overflow-hidden">
-          <div className="p-5 border-b border-slate-100 bg-slate-50/50 flex flex-col md:flex-row md:items-center justify-between gap-3">
-            <div>
-              <div className="flex items-center gap-2">
-                <h2 className="text-sm font-bold text-slate-900">
-                  Section {selectedSection} Master Subject-Wise Attendance Matrix
-                </h2>
-                <span className="px-2.5 py-0.5 rounded-md text-[10px] font-mono font-bold bg-indigo-50 text-indigo-700 border border-indigo-200">
-                  Sem 7
-                </span>
+                {/* Metric Summary Counters */}
+                <div className="flex items-center gap-3 shrink-0">
+                  <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200 text-center min-w-[90px]">
+                    <div className="text-lg font-bold text-slate-900">{currentSlotStats.total}</div>
+                    <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Enrolled</div>
+                  </div>
+                  <div className="p-3.5 rounded-2xl bg-emerald-50 border border-emerald-200 text-center min-w-[90px]">
+                    <div className="text-lg font-bold text-emerald-700">{currentSlotStats.present}</div>
+                    <div className="text-[10px] font-bold text-emerald-600 uppercase tracking-wider">Present</div>
+                  </div>
+                  <div className="p-3.5 rounded-2xl bg-rose-50 border border-rose-200 text-center min-w-[90px]">
+                    <div className="text-lg font-bold text-rose-700">{currentSlotStats.absent}</div>
+                    <div className="text-[10px] font-bold text-rose-600 uppercase tracking-wider">Absent</div>
+                  </div>
+                  <div className="p-3.5 rounded-2xl bg-blue-50 border border-blue-200 text-center min-w-[90px]">
+                    <div className="text-lg font-bold text-blue-700">{currentSlotStats.rate}%</div>
+                    <div className="text-[10px] font-bold text-blue-600 uppercase tracking-wider">Attendance</div>
+                  </div>
+                </div>
               </div>
-              <p className="text-xs text-slate-500 mt-1">
-                Full cumulative attendance percentage breakdown per student across all assigned courses with low-attendance warnings.
-              </p>
-            </div>
-            <div className="flex items-center gap-3">
-              <div className="flex items-center gap-1.5 text-xs font-semibold">
-                <span className="w-2.5 h-2.5 rounded-full bg-emerald-500" />
-                <span className="text-slate-600">≥ 75% Eligible</span>
-              </div>
-              <div className="flex items-center gap-1.5 text-xs font-semibold">
-                <span className="w-2.5 h-2.5 rounded-full bg-rose-500" />
-                <span className="text-slate-600">&lt; 75% Shortage</span>
-              </div>
-            </div>
-          </div>
-
-          {matrixLoading ? (
-            <div className="p-12 text-center text-slate-500 text-xs flex items-center justify-center gap-2">
-              <RotateCw className="w-4 h-4 animate-spin text-blue-600" />
-              Loading Subject Matrix...
             </div>
           ) : (
+            <div className="p-12 text-center bg-white rounded-3xl border border-slate-200 space-y-3">
+              <Clock className="w-10 h-10 text-slate-300 mx-auto" />
+              <h3 className="text-base font-bold text-slate-800">No Scheduled Classes Found</h3>
+              <p className="text-xs text-slate-500 max-w-md mx-auto">
+                No active timetable entry was found for your faculty account today. Check &quot;My Weekly Timetable&quot; to review your complete schedule.
+              </p>
+            </div>
+          )}
+
+          {/* Classroom CCTV Live Feed & AI Attendance Scanner */}
+          {displayedSlot && (
+            <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-lg text-white space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-800">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-2xl bg-blue-500/20 border border-blue-500/40 flex items-center justify-center text-blue-400">
+                    <Camera className="w-5 h-5 animate-pulse" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h3 className="text-sm font-bold text-white tracking-wide">
+                        {data?.cctv_camera?.name || `${displayedSlot.classroom} Main Overhead CCTV`}
+                      </h3>
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+                        <span>ONLINE &bull; 1080P</span>
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-slate-400 mt-0.5">
+                      Classroom: <strong className="text-slate-200">{displayedSlot.classroom}</strong> &bull; Section:{" "}
+                      <strong className="text-slate-200">{displayedSlot.section}</strong> &bull; AI Face Recognition Biometrics Engine
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={handleScanCCTVAttendance}
+                    disabled={
+                      isScanningCCTV ||
+                      (!displayedSlot.can_take_attendance && user?.role === "FACULTY")
+                    }
+                    className="w-full sm:w-auto px-5 py-2.5 rounded-xl bg-gradient-to-r from-blue-600 via-indigo-600 to-blue-700 hover:from-blue-500 hover:to-indigo-600 text-white font-bold text-xs shadow-md shadow-blue-900/30 transition disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2 cursor-pointer border border-blue-400/30"
+                  >
+                    {isScanningCCTV ? (
+                      <>
+                        <RotateCw className="w-4 h-4 animate-spin text-white" />
+                        <span>Scanning CCTV &amp; Matching Faces...</span>
+                      </>
+                    ) : !displayedSlot.can_take_attendance && user?.role === "FACULTY" ? (
+                      <>
+                        <Lock className="w-4 h-4 text-slate-300" />
+                        <span>CCTV Attendance Locked</span>
+                      </>
+                    ) : (
+                      <>
+                        <Camera className="w-4 h-4 text-blue-200" />
+                        <span>Take Attendance from CCTV</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              {/* Live Stream Viewport / Snapshot HUD */}
+              <div className="relative rounded-2xl overflow-hidden bg-slate-950 border border-slate-800/80 aspect-video max-h-72 w-full flex items-center justify-center">
+                {/* Video Stream or Snapshot */}
+                {data?.cctv_camera ? (
+                  <img
+                    src={`${API_BASE_URL}/cctv/cameras/${data.cctv_camera.id}/stream`}
+                    alt={data.cctv_camera.name}
+                    className="w-full h-full object-cover"
+                    onError={(e) => {
+                      (e.currentTarget as HTMLImageElement).src = `${API_BASE_URL}/cctv/cameras/${data.cctv_camera?.id}/snapshot?t=${Date.now()}`;
+                    }}
+                  />
+                ) : (
+                  <div className="text-center p-6 text-slate-500 space-y-2">
+                    <Camera className="w-10 h-10 mx-auto text-slate-600" />
+                    <p className="text-xs">Classroom CCTV Stream Initializing...</p>
+                  </div>
+                )}
+
+                {/* HUD Overlay Elements */}
+                <div className="absolute inset-0 pointer-events-none p-4 flex flex-col justify-between">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2 bg-black/60 backdrop-blur-md px-2.5 py-1 rounded-lg border border-white/10 text-[10px] font-mono text-emerald-400">
+                      <span className="w-2 h-2 rounded-full bg-rose-500 animate-pulse" />
+                      <span>REC</span>
+                      <span className="text-slate-400">|</span>
+                      <span>AI YUNET + SFACE DETECTOR</span>
+                    </div>
+
+                    <div className="bg-black/60 backdrop-blur-md px-2.5 py-1 rounded-lg border border-white/10 text-[10px] font-mono text-slate-300">
+                      {displayedSlot.classroom} &bull; CAM-0{data?.cctv_camera?.id || 4}
+                    </div>
+                  </div>
+
+                  {/* Scanning Animation bar when scanning */}
+                  {isScanningCCTV && (
+                    <div className="absolute inset-0 bg-blue-950/70 backdrop-blur-xs flex flex-col items-center justify-center gap-3">
+                      <div className="w-56 h-1.5 bg-blue-900 rounded-full overflow-hidden">
+                        <div className="h-full bg-blue-400 animate-pulse w-full" />
+                      </div>
+                      <div className="bg-slate-900/95 border border-blue-500/40 px-5 py-3 rounded-2xl text-center shadow-2xl">
+                        <p className="text-xs font-bold text-blue-300 flex items-center justify-center gap-2">
+                          <RotateCw className="w-4 h-4 animate-spin" />
+                          <span>Detecting Student Faces in Classroom CCTV...</span>
+                        </p>
+                        <p className="text-[10px] text-slate-400 mt-1">
+                          Matching 128-D SFace Embeddings against enrolled Section {displayedSlot.section} students
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="flex items-center justify-between text-[10px] font-mono text-slate-400 bg-black/60 backdrop-blur-md px-3 py-1.5 rounded-lg border border-white/10">
+                    <span>SEATING ROWS: 1-3 &bull; DESKS: 15</span>
+                    <span className="text-blue-400 font-bold">
+                      {displayedSlot.subject_code} &bull; {displayedSlot.start_time} - {displayedSlot.end_time}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* CCTV Scan Feedback Result Banner */}
+              {cctvScanResult && (
+                <div className="p-3.5 bg-emerald-950/60 border border-emerald-500/30 rounded-2xl flex items-center justify-between gap-3 text-xs">
+                  <div className="flex items-center gap-2.5">
+                    <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" />
+                    <div>
+                      <p className="font-bold text-emerald-200">{cctvScanResult.message}</p>
+                      <p className="text-[11px] text-emerald-400/80 mt-0.5">
+                        YuNet detected {cctvScanResult.detected_faces} face(s) in CCTV &bull; Verified {cctvScanResult.recognized_count} enrolled students via SFace biometrics.
+                      </p>
+                    </div>
+                  </div>
+                  <span className="px-2.5 py-1 rounded-lg bg-emerald-500/20 text-emerald-300 font-mono font-bold text-[10px] border border-emerald-500/30 shrink-0">
+                    VERIFIED
+                  </span>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Student Roster Table for This Subject & Section Only */}
+          <div className="bg-white border border-slate-200/90 rounded-3xl p-6 shadow-xs space-y-4">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 pb-3 border-b border-slate-100">
+              <div>
+                <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                  <Users className="w-4 h-4 text-blue-600" />
+                  <span>Enrolled Student Roster ({filteredRoster.length})</span>
+                </h3>
+                <p className="text-[11px] text-slate-500 mt-0.5">
+                  Showing students taking {displayedSlot?.subject_name || "this subject"} in {displayedSlot?.section || "Class"}.
+                </p>
+              </div>
+
+              {/* Action Buttons: Search & Quick CCTV Scan */}
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="relative w-64">
+                  <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    placeholder="Search enrolled students..."
+                    value={searchStudent}
+                    onChange={(e) => setSearchStudent(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-3 py-1.5 text-xs text-slate-800 focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+
+                <button
+                  onClick={handleScanCCTVAttendance}
+                  disabled={
+                    isScanningCCTV ||
+                    (!displayedSlot?.can_take_attendance && user?.role === "FACULTY")
+                  }
+                  className="px-3.5 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs shadow-xs transition disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Camera className="w-3.5 h-3.5" />
+                  <span>Scan CCTV</span>
+                </button>
+
+                <button
+                  onClick={() => loadTeacherData(selectedSlotId)}
+                  className="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs transition flex items-center gap-1.5 cursor-pointer"
+                  title="Refresh Roster"
+                >
+                  <RotateCw className="w-3.5 h-3.5" />
+                  <span>Refresh</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Roster Table */}
             <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs">
-                <thead className="bg-slate-50 text-slate-600 uppercase text-[10px] tracking-wider border-b border-slate-200 font-bold">
-                  <tr>
-                    <th className="px-5 py-3.5">#</th>
-                    <th className="px-5 py-3.5">Roll No</th>
-                    <th className="px-5 py-3.5">Student Name</th>
-                    {matrixSubjects.map((sub) => (
-                      <th key={sub.code} className="px-4 py-3.5 text-center border-l border-slate-200/70">
-                        <div className="font-bold text-slate-900">{sub.code}</div>
-                        <div className="text-[9px] text-slate-500 max-w-[100px] truncate">{sub.name}</div>
-                      </th>
-                    ))}
-                    <th className="px-5 py-3.5 text-center border-l border-slate-200/70">Overall Classes</th>
-                    <th className="px-5 py-3.5 text-center border-l border-slate-200/70">Overall %</th>
-                    <th className="px-5 py-3.5 text-center border-l border-slate-200/70">Eligibility</th>
+              <table className="w-full text-left border-collapse text-xs">
+                <thead>
+                  <tr className="bg-slate-50/70 border-b border-slate-100 text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                    <th className="py-3 px-4">Student Roll &amp; Photo</th>
+                    <th className="py-3 px-4">Student Name</th>
+                    <th className="py-3 px-4">Biometric DP</th>
+                    <th className="py-3 px-4">Duration &amp; Presence</th>
+                    <th className="py-3 px-4">Period Status</th>
+                    <th className="py-3 px-4 text-right">Attendance Action</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {filteredMatrix.map((row, idx) => {
-                    const isSafe = !row.has_shortage;
+                  {filteredRoster.map((st) => {
+                    const isPresent = st.status === "PRESENT";
+                    const isAbsent = st.status === "ABSENT";
+                    const isUpdating = updatingStudentId === st.student_id;
 
                     return (
-                      <tr key={row.student_id} className="hover:bg-blue-50/30 transition">
-                        <td className="px-5 py-3.5 text-slate-400 font-mono">{idx + 1}</td>
-                        <td className="px-5 py-3.5 font-mono font-bold text-slate-800">{row.roll_number}</td>
-                        <td className="px-5 py-3.5 font-semibold text-slate-900">{row.student_name}</td>
-
-                        {row.subjects.map((sub) => {
-                          const subSafe = sub.percentage >= 75.0;
-                          return (
-                            <td
-                              key={sub.subject_code}
-                              className="px-4 py-3.5 text-center border-l border-slate-100"
-                            >
-                              <div className="font-mono font-bold text-slate-800 text-xs">
-                                {sub.classes_attended}/{sub.classes_held}
-                              </div>
-                              <div
-                                className={`text-[10px] font-mono font-bold ${
-                                  subSafe ? "text-emerald-600" : "text-rose-600"
-                                }`}
-                              >
-                                {sub.percentage}%
-                              </div>
-                            </td>
-                          );
-                        })}
-
-                        <td className="px-5 py-3.5 text-center border-l border-slate-100 font-mono font-bold">
-                          <span className="text-emerald-600">{row.overall_attended}</span>
-                          <span className="text-slate-400"> / {row.overall_held}</span>
+                      <tr key={st.student_id} className="hover:bg-slate-50/50 transition">
+                        <td className="py-3 px-4 font-mono font-bold text-slate-800">
+                          <div className="flex items-center gap-2.5">
+                            {/* Instagram style DP thumbnail with Cloudinary support */}
+                            <div className="w-8 h-8 rounded-full overflow-hidden bg-slate-100 shrink-0 border border-slate-200">
+                              {st.photo_url ? (
+                                <img
+                                  src={st.photo_url}
+                                  alt={st.full_name}
+                                  className="w-full h-full object-cover"
+                                  onError={(e) => {
+                                    (e.currentTarget as HTMLImageElement).src = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32"><rect width="32" height="32" fill="%232563eb" rx="16"/><text x="50%" y="55%" dominant-baseline="middle" text-anchor="middle" fill="white" font-weight="bold" font-family="sans-serif" font-size="11">${st.full_name.slice(0, 2).toUpperCase()}</text></svg>`;
+                                  }}
+                                />
+                              ) : (
+                                <div className="w-full h-full flex items-center justify-center bg-slate-200 text-slate-500 font-bold text-[10px]">
+                                  {st.full_name.slice(0, 2).toUpperCase()}
+                                </div>
+                              )}
+                            </div>
+                            <span>{st.roll_number}</span>
+                          </div>
                         </td>
 
-                        <td className="px-5 py-3.5 text-center border-l border-slate-100 font-mono">
-                          <span
-                            className={`font-bold text-xs ${
-                              isSafe ? "text-emerald-700" : "text-rose-700"
-                            }`}
-                          >
-                            {row.overall_percentage}%
-                          </span>
+                        <td className="py-3 px-4">
+                          <div className="font-bold text-slate-900">{st.full_name}</div>
+                          <div className="text-[10px] text-slate-400 font-mono">Sec {st.section}</div>
                         </td>
 
-                        <td className="px-5 py-3.5 text-center border-l border-slate-100">
-                          {row.has_shortage ? (
-                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold font-mono bg-rose-50 text-rose-700 border border-rose-200">
-                              <AlertTriangle className="w-3 h-3 text-rose-600" />
-                              SHORTAGE
+                        <td className="py-3 px-4">
+                          {st.biometric_enrolled ? (
+                            <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
+                              <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                              <span>Enrolled</span>
                             </span>
                           ) : (
-                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold font-mono bg-emerald-50 text-emerald-700 border border-emerald-200">
-                              <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                              ELIGIBLE
+                            <span className="text-[10px] text-slate-400 font-semibold bg-slate-100 px-2 py-0.5 rounded-full">
+                              Pending
                             </span>
                           )}
+                        </td>
+
+                        <td className="py-3 px-4 font-mono text-[11px] text-slate-600">
+                          <div className="flex items-center gap-2">
+                            <span className="font-bold text-slate-800">
+                              {isPresent ? "60 min (100%)" : "0 min (0%)"}
+                            </span>
+                          </div>
+                        </td>
+
+                        <td className="py-3 px-4">
+                          {isPresent ? (
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 font-bold border border-emerald-200 text-[10px]">
+                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                              <span>PRESENT</span>
+                              {st.verification_method === "FACE_RECOGNITION" ? (
+                                <span className="text-[9px] font-semibold text-emerald-800 bg-emerald-100/80 px-1.5 py-0.5 rounded-md border border-emerald-300">
+                                  CCTV AI Face
+                                </span>
+                              ) : (
+                                <span className="text-[9px] font-semibold text-slate-600 bg-slate-100 px-1.5 py-0.5 rounded-md">
+                                  Manual
+                                </span>
+                              )}
+                            </span>
+                          ) : isAbsent ? (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-rose-50 text-rose-700 font-bold border border-rose-200 text-[10px]">
+                              <span className="w-1.5 h-1.5 rounded-full bg-rose-500" />
+                              <span>ABSENT</span>
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-slate-100 text-slate-600 font-bold text-[10px]">
+                              <span>UNRECORDED</span>
+                            </span>
+                          )}
+                        </td>
+
+                        <td className="py-3 px-4 text-right">
+                          <button
+                            onClick={() => handleToggleStatus(st.student_id, st.status)}
+                            disabled={
+                              isUpdating || (!displayedSlot?.can_take_attendance && user?.role === "FACULTY")
+                            }
+                            className={`px-3 py-1 rounded-xl text-xs font-bold transition shadow-xs cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
+                              isPresent
+                                ? "bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200"
+                                : "bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200"
+                            }`}
+                          >
+                            {isUpdating ? "Updating..." : isPresent ? "Set Absent" : "Set Present"}
+                          </button>
                         </td>
                       </tr>
                     );
                   })}
-
-                  {filteredMatrix.length === 0 && (
-                    <tr>
-                      <td colSpan={matrixSubjects.length + 6} className="px-5 py-12 text-center text-slate-400 bg-slate-50/40 text-xs">
-                        No student matrix data found for Section {selectedSection}.
-                      </td>
-                    </tr>
-                  )}
                 </tbody>
               </table>
+
+              {filteredRoster.length === 0 && (
+                <div className="p-8 text-center text-xs text-slate-400">
+                  No students found matching your filter for this class.
+                </div>
+              )}
             </div>
-          )}
+          </div>
         </div>
       )}
 
-      {/* TAB 3: Weekly Timetable Grid */}
+      {/* =========================================================================
+          TAB 2: MY WEEKLY TIMETABLE (AUTOMATICALLY EXTRACTED FROM ADMIN MASTER)
+      ========================================================================= */}
       {activeTab === "weekly_timetable" && (
-        <div className="rounded-2xl border border-slate-200/90 bg-white shadow-xs p-6 space-y-4">
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 border-b border-slate-100 pb-4">
+        <div className="space-y-4">
+          <div className="bg-white border border-slate-200/90 rounded-3xl p-6 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-3">
             <div>
-              <h2 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-                <Clock className="w-4 h-4 text-blue-600" />
-                Section {selectedSection} Official Weekly Class Timetable
+              <h2 className="text-base font-bold text-slate-900 tracking-tight flex items-center gap-2">
+                <CalendarDays className="w-5 h-5 text-blue-600" />
+                <span>My Weekly Teaching Schedule</span>
               </h2>
-              <p className="text-xs text-slate-500 mt-1">
-                Period Schedule (Periods 1 to 6) configured for automatic AI Camera scanning and faculty attendance ledger.
+              <p className="text-xs text-slate-500 mt-0.5">
+                Automatically filtered from the college-wide master timetable created by Admin.
               </p>
             </div>
-            <div className="px-3 py-1 rounded-lg bg-blue-50 border border-blue-200 text-blue-700 text-xs font-mono font-semibold">
-              6 Slots / Day (Mon - Sat)
+
+            <div className="flex items-center gap-2 text-xs">
+              <span className="p-1 rounded-md bg-blue-50 text-blue-700 font-bold font-mono px-2">
+                Today: {data?.current_day}
+              </span>
             </div>
           </div>
 
-          {timetableLoading ? (
-            <div className="p-12 text-center text-slate-500 text-xs flex items-center justify-center gap-2">
-              <RotateCw className="w-4 h-4 animate-spin text-blue-600" />
-              Loading Timetable Grid...
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {weeklyGrid?.days.map((day) => {
-                const slots = weeklyGrid.grid[day] || [];
+          {/* Timetable Grid Day-by-Day */}
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {(data?.weekly_grid?.days || [
+              "Monday",
+              "Tuesday",
+              "Wednesday",
+              "Thursday",
+              "Friday",
+              "Saturday",
+            ]).map((day) => {
+              const daySlots = data?.weekly_grid?.grid?.[day] || [];
+              const isToday = data?.current_day.toLowerCase() === day.toLowerCase();
 
-                return (
-                  <div
-                    key={day}
-                    className="rounded-2xl border border-slate-200 bg-slate-50/60 p-4 space-y-3"
-                  >
-                    <div className="flex items-center justify-between border-b border-slate-200 pb-2">
-                      <span className="font-bold text-slate-900 text-sm">{day}</span>
-                      <span className="text-[10px] font-mono font-bold text-blue-700 bg-blue-100/70 px-2 py-0.5 rounded-md">
-                        {slots.length} Periods
-                      </span>
-                    </div>
-
-                    <div className="space-y-2">
-                      {slots.map((s) => (
-                        <div
-                          key={s.id}
-                          className="p-3 rounded-xl bg-white border border-slate-200/80 hover:border-blue-400 hover:shadow-xs transition flex items-center justify-between text-xs"
-                        >
-                          <div>
-                            <div className="flex items-center gap-2">
-                              <span className="font-mono font-bold text-blue-600 text-[11px] bg-blue-50 px-1.5 py-0.5 rounded">
-                                P{s.period_number}
-                              </span>
-                              <span className="font-bold text-slate-900">{s.subject_name}</span>
-                            </div>
-                            <div className="text-[10px] text-slate-500 font-mono mt-1">
-                              {s.subject_code} • {s.faculty_name}
-                            </div>
-                          </div>
-                          <div className="text-right">
-                            <div className="font-mono text-slate-700 font-semibold text-[11px]">
-                              {s.start_time} - {s.end_time}
-                            </div>
-                            <div className="text-[10px] text-slate-400 font-medium">{s.classroom}</div>
-                          </div>
-                        </div>
-                      ))}
-
-                      {slots.length === 0 && (
-                        <div className="text-center py-6 text-slate-400 text-xs italic">No periods scheduled.</div>
+              return (
+                <div
+                  key={day}
+                  className={`bg-white border rounded-3xl p-5 shadow-xs space-y-3 transition ${
+                    isToday ? "border-blue-400 ring-2 ring-blue-500/10" : "border-slate-200/90"
+                  }`}
+                >
+                  <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+                    <span className="text-sm font-bold text-slate-900 flex items-center gap-1.5">
+                      <span>{day}</span>
+                      {isToday && (
+                        <span className="text-[10px] font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full">
+                          Today
+                        </span>
                       )}
-                    </div>
+                    </span>
+                    <span className="text-xs font-mono font-bold text-slate-500">
+                      {daySlots.length} Period{daySlots.length !== 1 ? "s" : ""}
+                    </span>
                   </div>
-                );
-              })}
+
+                  <div className="space-y-2">
+                    {daySlots.length > 0 ? (
+                      daySlots.map((slot) => {
+                        const isCurrentSlot =
+                          isToday &&
+                          slot.start_time <= (data?.current_time || "") &&
+                          (data?.current_time || "") <= slot.end_time;
+
+                        return (
+                          <div
+                            key={slot.id}
+                            onClick={() => {
+                              setSelectedSlotId(slot.id);
+                              switchTab("live_attendance");
+                            }}
+                            className={`p-3 rounded-2xl border transition cursor-pointer space-y-1.5 ${
+                              isCurrentSlot
+                                ? "bg-emerald-50/90 border-emerald-300 ring-1 ring-emerald-400"
+                                : "bg-slate-50/70 border-slate-200/80 hover:bg-blue-50/40 hover:border-blue-300"
+                            }`}
+                          >
+                            <div className="flex items-center justify-between">
+                              <span className="font-mono text-[11px] font-bold text-blue-700 bg-blue-100/60 px-2 py-0.5 rounded-lg">
+                                {slot.start_time} - {slot.end_time}
+                              </span>
+                              <span className="text-[10px] font-bold text-slate-600 flex items-center gap-1">
+                                <MapPin className="w-3 h-3 text-rose-500" />
+                                <span>{slot.classroom}</span>
+                              </span>
+                            </div>
+
+                            <div>
+                              <div className="text-xs font-bold text-slate-900 truncate">
+                                {slot.subject_name}
+                              </div>
+                              <div className="text-[10px] font-mono text-slate-500 flex items-center justify-between">
+                                <span>{slot.subject_code}</span>
+                                <span>Section: {slot.section}</span>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })
+                    ) : (
+                      <div className="py-6 text-center text-xs text-slate-400 italic">
+                        No periods assigned for {day}.
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* =========================================================================
+          TAB 3: MY SUBJECTS & STUDENTS ATTENDANCE
+      ========================================================================= */}
+      {activeTab === "subject_matrix" && (
+        <div className="space-y-6">
+          <div className="bg-white border border-slate-200/90 rounded-3xl p-6 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-3">
+            <div>
+              <h2 className="text-base font-bold text-slate-900 tracking-tight flex items-center gap-2">
+                <BookOpen className="w-5 h-5 text-blue-600" />
+                <span>My Assigned Curriculum Subjects</span>
+              </h2>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Overview of courses you are assigned to instruct, student counts, and semester metrics.
+              </p>
             </div>
-          )}
-        </div>
-      )}
-
-      {/* TAB 4: Subject Faculty Course Sessions & Email */}
-      {activeTab === "faculty_sessions" && (
-        <div className="rounded-2xl border border-slate-200/90 bg-white shadow-xs overflow-hidden">
-          <div className="p-5 border-b border-slate-100 bg-slate-50/50">
-            <h2 className="text-sm font-bold text-slate-900">Day-by-Day Course Sessions & Dispatch</h2>
-            <p className="text-xs text-slate-500 mt-1">
-              Browse every class session by date with instant option to email official attendance report via SMTP.
-            </p>
           </div>
 
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
-              <thead className="bg-slate-50 text-slate-600 uppercase text-[10px] tracking-wider border-b border-slate-200 font-bold">
-                <tr>
-                  <th className="px-5 py-3.5">Date</th>
-                  <th className="px-5 py-3.5">Time Slot</th>
-                  <th className="px-5 py-3.5">Classroom</th>
-                  <th className="px-5 py-3.5">Present</th>
-                  <th className="px-5 py-3.5">Absent</th>
-                  <th className="px-5 py-3.5">Left Early</th>
-                  <th className="px-5 py-3.5">Rate</th>
-                  <th className="px-5 py-3.5">SMTP Email</th>
-                  <th className="px-5 py-3.5">Action</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {recentSessions.map((sess) => (
-                  <tr key={sess.session_id} className="hover:bg-blue-50/30 transition">
-                    <td className="px-5 py-3.5 font-mono font-bold text-slate-800">{sess.date}</td>
-                    <td className="px-5 py-3.5 font-mono text-slate-600">{sess.time_slot}</td>
-                    <td className="px-5 py-3.5 text-slate-600">{sess.classroom}</td>
-                    <td className="px-5 py-3.5 font-mono text-emerald-600 font-bold">{sess.present_count}</td>
-                    <td className="px-5 py-3.5 font-mono text-rose-600 font-bold">{sess.absent_count}</td>
-                    <td className="px-5 py-3.5 font-mono text-amber-600 font-bold">{sess.left_early_count}</td>
-                    <td className="px-5 py-3.5 font-mono text-blue-600 font-bold">{sess.attendance_rate}%</td>
-                    <td className="px-5 py-3.5">
-                      {sess.email_sent ? (
-                        <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                          SENT
-                        </span>
-                      ) : (
-                        <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-slate-100 text-slate-500">
-                          NOT SENT
-                        </span>
-                      )}
-                    </td>
-                    <td className="px-5 py-3.5">
-                      <button
-                        onClick={() => handleSendEmailReport(sess.session_id)}
-                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 font-semibold transition text-[11px] cursor-pointer"
-                      >
-                        <Mail className="w-3.5 h-3.5" />
-                        Send Report via Email
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-
-                {recentSessions.length === 0 && (
-                  <tr>
-                    <td colSpan={9} className="px-5 py-10 text-center text-slate-400 bg-slate-50/40">
-                      No completed class sessions recorded yet.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
-      {/* TAB 5: Security & Covered Face Incidents */}
-      {activeTab === "incidents" && (
-        <div className="rounded-2xl border border-slate-200/90 bg-white p-6 space-y-4 shadow-xs">
-          <div>
-            <h2 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-              <ShieldAlert className="w-4 h-4 text-rose-600" />
-              Covered Face &amp; Occluded Departure Incidents
-            </h2>
-            <p className="text-xs text-slate-500 mt-0.5">
-              Photographic proofs captured when students exited the classroom with concealed faces (hands, hoods, or masks).
-            </p>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {incidents.map((inc) => (
+          {/* Subject Cards */}
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {(data?.my_subjects || []).map((sub) => (
               <div
-                key={inc.id}
-                className="rounded-2xl border border-rose-200 bg-rose-50/40 p-4 space-y-3"
+                key={sub.id}
+                className="bg-white border border-slate-200/90 rounded-3xl p-5 shadow-xs space-y-3 hover:border-blue-300 transition"
               >
-                <div className="flex items-center justify-between text-xs">
-                  <span className="font-mono text-rose-700 font-bold uppercase">{inc.event_type}</span>
-                  <span className="text-slate-500 text-[11px] font-mono">
-                    {new Date(inc.timestamp).toLocaleString()}
+                <div className="flex items-center justify-between">
+                  <span className="font-mono text-xs font-bold text-blue-700 bg-blue-50 border border-blue-200 px-2.5 py-0.5 rounded-lg">
+                    {sub.code}
+                  </span>
+                  <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-slate-100 text-slate-700">
+                    Sem {sub.semester} &bull; {sub.credits} Credits
                   </span>
                 </div>
 
-                <div className="text-xs text-slate-700 space-y-0.5">
-                  <div>
-                    Location: <strong>{inc.classroom}</strong> ({inc.camera_name})
-                  </div>
-                  <div>
-                    Suspected Student: <strong className="text-rose-700">{inc.student_name}</strong> ({inc.roll_number})
-                  </div>
-                  <p className="text-[11px] text-slate-500 mt-1">{inc.details}</p>
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900 leading-snug">{sub.name}</h3>
+                  <p className="text-xs text-slate-500 mt-0.5">{sub.department}</p>
                 </div>
 
-                {inc.photo_proof_path && (
-                  <div className="rounded-xl overflow-hidden border border-slate-200 bg-slate-100 aspect-video flex items-center justify-center">
-                    <img src={inc.photo_proof_path} alt="Proof" className="w-full h-full object-cover" />
+                <div className="border-t border-slate-100 pt-3 grid grid-cols-2 gap-2 text-xs">
+                  <div className="p-2 bg-slate-50 rounded-xl">
+                    <div className="text-[10px] text-slate-400 uppercase font-semibold">Enrolled</div>
+                    <div className="text-sm font-bold text-slate-800">{sub.enrolled_students_count} Students</div>
                   </div>
-                )}
+                  <div className="p-2 bg-slate-50 rounded-xl">
+                    <div className="text-[10px] text-slate-400 uppercase font-semibold">Classes Held</div>
+                    <div className="text-sm font-bold text-slate-800">{sub.classes_held} Sessions</div>
+                  </div>
+                </div>
+
+                <div className="pt-1 flex items-center justify-between text-xs text-slate-500">
+                  <span className="flex items-center gap-1">
+                    <MapPin className="w-3.5 h-3.5 text-rose-500" />
+                    <span>{sub.classroom || "Room 302"}</span>
+                  </span>
+                  <span>Section: {sub.section}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* =========================================================================
+          TAB 4: TODAY'S SCHEDULE TIMELINE
+      ========================================================================= */}
+      {activeTab === "today_timeline" && (
+        <div className="bg-white border border-slate-200/90 rounded-3xl p-6 shadow-xs space-y-4">
+          <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+            <div>
+              <h2 className="text-base font-bold text-slate-900 tracking-tight flex items-center gap-2">
+                <Clock className="w-5 h-5 text-blue-600" />
+                <span>Today&apos;s Class Timeline ({data?.current_day})</span>
+              </h2>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Real-time tracking of periods and attendance locks for {data?.current_date}.
+              </p>
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            {(data?.today_schedule || []).map((slot) => (
+              <div
+                key={slot.id}
+                className={`p-4 rounded-2xl border transition flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
+                  slot.is_active_now
+                    ? "bg-emerald-50/80 border-emerald-300 ring-2 ring-emerald-500/15"
+                    : "bg-slate-50/60 border-slate-200/80"
+                }`}
+              >
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono text-xs font-bold text-blue-700 bg-blue-100/70 px-2 py-0.5 rounded-lg">
+                      {slot.start_time} - {slot.end_time}
+                    </span>
+                    <span className="font-mono text-xs font-semibold text-slate-600">
+                      Period {slot.period_number}
+                    </span>
+                    <span className="text-xs font-semibold text-slate-500 flex items-center gap-1">
+                      <MapPin className="w-3 h-3 text-rose-500" />
+                      <span>{slot.classroom}</span>
+                    </span>
+                  </div>
+
+                  <h3 className="text-sm font-bold text-slate-900">{slot.subject_name}</h3>
+                  <p className="text-xs text-slate-500">
+                    Section {slot.section} &bull; Code: {slot.subject_code}
+                  </p>
+
+                  {slot.lock_reason && (
+                    <p className="text-[11px] text-amber-700 font-medium">{slot.lock_reason}</p>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-2">
+                  {slot.is_active_now ? (
+                    <button
+                      onClick={() => {
+                        setSelectedSlotId(slot.id);
+                        switchTab("live_attendance");
+                      }}
+                      className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-xs transition flex items-center gap-1.5"
+                    >
+                      <CheckCircle2 className="w-4 h-4" />
+                      <span>Take Attendance Now</span>
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => {
+                        setSelectedSlotId(slot.id);
+                        switchTab("live_attendance");
+                      }}
+                      className="px-3.5 py-2 rounded-xl bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 font-bold text-xs shadow-xs transition flex items-center gap-1.5"
+                    >
+                      <Lock className="w-3.5 h-3.5 text-slate-400" />
+                      <span>View Roster</span>
+                    </button>
+                  )}
+                </div>
               </div>
             ))}
 
-            {incidents.length === 0 && (
-              <div className="col-span-full text-center py-12 text-slate-400 bg-slate-50/50 rounded-2xl border border-slate-100">
-                <CheckCircle2 className="w-10 h-10 mx-auto mb-2 text-emerald-500" />
-                <p className="text-xs font-semibold text-slate-700">Zero security incidents or covered-face exits recorded.</p>
-                <p className="text-[11px] text-slate-400">Classroom attendance monitoring running normally.</p>
+            {(data?.today_schedule || []).length === 0 && (
+              <div className="p-8 text-center text-xs text-slate-400 italic">
+                No classes scheduled for you today ({data?.current_day}).
               </div>
             )}
           </div>
         </div>
       )}
     </div>
+  );
+}
+
+export default function TeacherPortalPage() {
+  return (
+    <Suspense fallback={<div className="p-8 text-center text-xs text-slate-400">Loading Teacher Workspace...</div>}>
+      <TeacherPortalContent />
+    </Suspense>
   );
 }

@@ -20,6 +20,13 @@ import {
   MapPin,
   X,
   ExternalLink,
+  Radio,
+  Tv,
+  Settings2,
+  Server,
+  Wifi,
+  Eye,
+  Check,
 } from "lucide-react";
 import Link from "next/link";
 import { API_BASE_URL, getAuthHeaders } from "@/lib/api";
@@ -69,6 +76,7 @@ export interface DetectedFaceItem {
   liveness_score: number;
   spoof_detected: boolean;
   verification_method?: string;
+  verification_status?: string;
   landmarks?: number[][] | null;
 }
 
@@ -110,6 +118,42 @@ interface TimetableSlotItem {
   day_of_week?: string;
 }
 
+export interface ActiveClassInfo {
+  has_active_class: boolean;
+  has_conflict?: boolean;
+  conflict_message?: string;
+  classroom: string;
+  current_time?: string;
+  current_date?: string;
+  day_of_week?: string;
+  timetable_id?: number;
+  period_number?: number;
+  start_time?: string;
+  end_time?: string;
+  subject_code?: string;
+  subject_name?: string;
+  department?: string;
+  semester?: number;
+  section?: string;
+  faculty_name?: string;
+  faculty_email?: string;
+  camera_id?: number | null;
+  camera_name?: string | null;
+  session_id?: number | null;
+  session_status?: string;
+  message?: string;
+  next_class?: {
+    period_number: number;
+    start_time: string;
+    end_time: string;
+    subject_code: string;
+    subject_name: string;
+    faculty_name: string;
+    section?: string;
+  } | null;
+}
+
+
 /**
  * Draws a 3D-style Biometric Mesh / Constellation of sticks & glowing nodes.
  * - When matched: Vibrant glowing green sticks & glowing green dots.
@@ -125,39 +169,47 @@ export function drawBiometricFaceMesh(
   isRecognized: boolean,
   isSpoof: boolean = false,
   landmarks?: number[][] | null,
-  labelInfo?: { name?: string; roll?: string; confidence?: number }
+  labelInfo?: { name?: string; roll?: string; confidence?: number; statusTag?: string }
 ) {
-  const primaryColor = isSpoof
+  const isSpoofActive = isSpoof || labelInfo?.statusTag === "SPOOF_ALERT";
+
+  // Visual Theme Palette (Matching image.png: Luminous Cyan-White Geometric Wireframe)
+  // When Recognized: High-coherence Emerald-Cyan
+  // When Verifying/Reading: Brilliant Electric Cyan (#00f0ff / #38bdf8) with crisp white nodes
+  // When Spoof: Alert Amber-Crimson
+  const primaryColor = isSpoofActive
     ? "#f59e0b"
     : isRecognized
     ? "#10b981"
-    : "#ef4444";
-  const glowColor = isSpoof
-    ? "rgba(245, 158, 11, 0.55)"
-    : isRecognized
-    ? "rgba(16, 185, 129, 0.55)"
-    : "rgba(239, 68, 68, 0.55)";
-  const stickColor = isSpoof
-    ? "rgba(245, 158, 11, 0.9)"
-    : isRecognized
-    ? "rgba(52, 211, 153, 0.92)"
-    : "rgba(248, 113, 113, 0.92)";
-  const dotColor = isSpoof
-    ? "#fbbf24"
-    : isRecognized
-    ? "#6ee7b7"
-    : "#fca5a5";
+    : "#00f0ff";
 
-  // Center & key proportional anchor points
+  const glowColor = isSpoofActive
+    ? "rgba(245, 158, 11, 0.70)"
+    : isRecognized
+    ? "rgba(16, 185, 129, 0.65)"
+    : "rgba(0, 240, 255, 0.65)";
+
+  const wireColor = isSpoofActive
+    ? "rgba(251, 191, 36, 0.85)"
+    : isRecognized
+    ? "rgba(110, 231, 183, 0.90)"
+    : "rgba(224, 242, 254, 0.88)";
+
+  const nodeHaloColor = isSpoofActive
+    ? "rgba(245, 158, 11, 0.95)"
+    : isRecognized
+    ? "rgba(52, 211, 153, 0.95)"
+    : "rgba(56, 189, 248, 0.95)";
+
+  // Adaptive 3D Structural Fitting (Unique per face geometry)
   const cx = x + w * 0.5;
 
-  let reX = cx + w * 0.22, reY = y + h * 0.38; // Right eye
-  let leX = cx - w * 0.22, leY = y + h * 0.38; // Left eye
+  let reX = cx + w * 0.22, reY = y + h * 0.38; // Right eye pupil
+  let leX = cx - w * 0.22, leY = y + h * 0.38; // Left eye pupil
   let ntX = cx, ntY = y + h * 0.58;             // Nose tip
-  let rcX = cx + w * 0.20, rcY = y + h * 0.74; // Right mouth
-  let lcX = cx - w * 0.20, lcY = y + h * 0.74; // Left mouth
+  let rcX = cx + w * 0.20, rcY = y + h * 0.74; // Right mouth corner
+  let lcX = cx - w * 0.20, lcY = y + h * 0.74; // Left mouth corner
 
-  // If real YuNet landmarks exist:
   if (landmarks && landmarks.length >= 5) {
     reX = landmarks[0][0]; reY = landmarks[0][1];
     leX = landmarks[1][0]; leY = landmarks[1][1];
@@ -166,80 +218,174 @@ export function drawBiometricFaceMesh(
     lcX = landmarks[4][0]; lcY = landmarks[4][1];
   }
 
-  // Construct biometric constellation nodes based on facial anatomy:
-  const pForeheadTop = { x: cx, y: y + h * 0.08 };
-  const pForeheadL = { x: cx - w * 0.26, y: y + h * 0.16 };
-  const pForeheadR = { x: cx + w * 0.26, y: y + h * 0.16 };
-  const pTempleL = { x: x + w * 0.08, y: y + h * 0.28 };
-  const pTempleR = { x: x + w * 0.92, y: y + h * 0.28 };
+  // Inter-pupillary distance vector and face roll angle
+  const dxEye = reX - leX;
+  const dyEye = reY - leY;
+  const eyeDist = Math.hypot(dxEye, dyEye) || (w * 0.44);
+  const rollAngle = Math.atan2(dyEye, dxEye);
 
-  const pBrowInnerL = { x: cx - w * 0.10, y: y + h * 0.30 };
-  const pBrowInnerR = { x: cx + w * 0.10, y: y + h * 0.30 };
-  const pBrowMidL = { x: cx - w * 0.26, y: y + h * 0.28 };
-  const pBrowMidR = { x: cx + w * 0.26, y: y + h * 0.28 };
+  // Normal and Tangential Unit Vectors aligned with face head tilt
+  const uX = Math.cos(rollAngle); // lateral axis along eye line
+  const uY = Math.sin(rollAngle);
+  const nX = -uY;                 // vertical downward axis along face bridge
+  const nY = uX;
 
-  const pNoseBridgeTop = { x: cx, y: y + h * 0.32 };
-  const pNoseBridgeMid = { x: cx, y: (pNoseBridgeTop.y + ntY) * 0.5 };
+  // Midpoints
+  const midEyeX = (reX + leX) * 0.5;
+  const midEyeY = (reY + leY) * 0.5;
+  const midMouthX = (rcX + lcX) * 0.5;
+  const midMouthY = (rcY + lcY) * 0.5;
+
+  // Real-time lateral yaw detection (ratio of nose lateral offset from eye midpoint)
+  const noseLateralOffset = (ntX - midEyeX) * uX + (ntY - midEyeY) * uY;
+  const yawRatio = Math.max(-0.55, Math.min(0.55, noseLateralOffset / (eyeDist * 0.45 || 1)));
+
+  // Real-time vertical pitch detection (ratio of eye-to-nose vs nose-to-mouth)
+  const eyeToNose = (ntX - midEyeX) * nX + (ntY - midEyeY) * nY;
+  const noseToMouth = (midMouthX - ntX) * nX + (midMouthY - ntY) * nY;
+  const pitchRatio = Math.max(-0.4, Math.min(0.4, (eyeToNose - noseToMouth) / (eyeDist || 1)));
+
+  // Real-time mouth aspect ratio (smiling, speaking, open/closed)
+  const measuredMouthWidth = Math.hypot(rcX - lcX, rcY - lcY);
+  const mouthAspect = Math.max(0.25, Math.min(0.5, measuredMouthWidth / (eyeDist || 1)));
+
+  // Construct Landmark Nodes (Directly matching image.png wireframe topology)
+  const foreheadH = eyeDist * (1.08 - pitchRatio * 0.35);
+  const pForeheadTopCenter = {
+    x: midEyeX - nX * foreheadH + uX * (yawRatio * eyeDist * 0.15),
+    y: midEyeY - nY * foreheadH + uY * (yawRatio * eyeDist * 0.15)
+  };
+  const pForeheadTopL = {
+    x: pForeheadTopCenter.x - uX * eyeDist * (0.82 + yawRatio * 0.30) - nX * (eyeDist * 0.14),
+    y: pForeheadTopCenter.y - uY * eyeDist * (0.82 + yawRatio * 0.30) - nY * (eyeDist * 0.14)
+  };
+  const pForeheadTopR = {
+    x: pForeheadTopCenter.x + uX * eyeDist * (0.82 - yawRatio * 0.30) - nX * (eyeDist * 0.14),
+    y: pForeheadTopCenter.y + uY * eyeDist * (0.82 - yawRatio * 0.30) - nY * (eyeDist * 0.14)
+  };
+
+  // Glabella (Mid-forehead between eyebrows)
+  const pGlabella = {
+    x: midEyeX - nX * (eyeDist * 0.36),
+    y: midEyeY - nY * (eyeDist * 0.36)
+  };
+
+  // Brow Arches (Inner, Mid, Outer)
+  const pBrowInnerL = { x: leX + uX * eyeDist * 0.18 - nX * eyeDist * 0.30, y: leY + uY * eyeDist * 0.18 - nY * eyeDist * 0.30 };
+  const pBrowMidL   = { x: leX - nX * eyeDist * 0.35, y: leY - nY * eyeDist * 0.35 };
+  const pBrowOuterL = { x: leX - uX * eyeDist * 0.38 - nX * eyeDist * 0.28, y: leY - uY * eyeDist * 0.38 - nY * eyeDist * 0.28 };
+
+  const pBrowInnerR = { x: reX - uX * eyeDist * 0.18 - nX * eyeDist * 0.30, y: reY - uY * eyeDist * 0.18 - nY * eyeDist * 0.30 };
+  const pBrowMidR   = { x: reX - nX * eyeDist * 0.35, y: reY - nY * eyeDist * 0.35 };
+  const pBrowOuterR = { x: reX + uX * eyeDist * 0.38 - nX * eyeDist * 0.28, y: reY + uY * eyeDist * 0.38 - nY * eyeDist * 0.28 };
+
+  // Temples
+  const pTempleL = { x: leX - uX * eyeDist * (0.76 + yawRatio * 0.25) - nX * eyeDist * 0.08, y: leY - uY * eyeDist * (0.76 + yawRatio * 0.25) - nY * eyeDist * 0.08 };
+  const pTempleR = { x: reX + uX * eyeDist * (0.76 - yawRatio * 0.25) - nX * eyeDist * 0.08, y: reY + uY * eyeDist * (0.76 - yawRatio * 0.25) - nY * eyeDist * 0.08 };
+
+  // Eyes (Inner canthus, Pupil center, Outer canthus, Upper lid, Lower lid)
+  const pEyeCenterL = { x: leX, y: leY };
+  const pEyeInnerL  = { x: leX + uX * eyeDist * 0.28, y: leY + uY * eyeDist * 0.28 };
+  const pEyeOuterL  = { x: leX - uX * eyeDist * 0.30, y: leY - uY * eyeDist * 0.30 };
+  const pEyeTopL    = { x: leX - nX * eyeDist * 0.16, y: leY - nY * eyeDist * 0.16 };
+  const pEyeBottomL = { x: leX + nX * eyeDist * 0.14, y: leY + nY * eyeDist * 0.14 };
+
+  const pEyeCenterR = { x: reX, y: reY };
+  const pEyeInnerR  = { x: reX - uX * eyeDist * 0.28, y: reY - uY * eyeDist * 0.28 };
+  const pEyeOuterR  = { x: reX + uX * eyeDist * 0.30, y: reY + uY * eyeDist * 0.30 };
+  const pEyeTopR    = { x: reX - nX * eyeDist * 0.16, y: reY - nY * eyeDist * 0.16 };
+  const pEyeBottomR = { x: reX + nX * eyeDist * 0.14, y: reY + nY * eyeDist * 0.14 };
+
+  // Nose (Bridge top, Bridge mid, Tip, Nostril L, Nostril R)
+  const pNoseBridgeTop = { x: midEyeX, y: midEyeY };
+  const pNoseBridgeMid = { x: (midEyeX + ntX) * 0.5, y: (midEyeY + ntY) * 0.5 };
   const pNoseTip = { x: ntX, y: ntY };
-  const pNostrilL = { x: cx - w * 0.13, y: ntY + h * 0.02 };
-  const pNostrilR = { x: cx + w * 0.13, y: ntY + h * 0.02 };
+  const nostrilSpread = eyeDist * 0.32;
+  const pNostrilL = { x: ntX - uX * nostrilSpread * (1 + yawRatio * 0.3) + nX * eyeDist * 0.06, y: ntY - uY * nostrilSpread * (1 + yawRatio * 0.3) + nY * eyeDist * 0.06 };
+  const pNostrilR = { x: ntX + uX * nostrilSpread * (1 - yawRatio * 0.3) + nX * eyeDist * 0.06, y: ntY + uY * nostrilSpread * (1 - yawRatio * 0.3) + nY * eyeDist * 0.06 };
 
-  const pEyeL = { x: leX, y: leY };
-  const pEyeR = { x: reX, y: reY };
-  const pEyeInnerL = { x: cx - w * 0.09, y: leY };
-  const pEyeOuterL = { x: x + w * 0.10, y: leY };
-  const pEyeInnerR = { x: cx + w * 0.09, y: reY };
-  const pEyeOuterR = { x: x + w * 0.90, y: reY };
+  // Cheeks (Zygomatic Arch)
+  const pCheekL = { x: leX - uX * eyeDist * (0.66 + yawRatio * 0.22) + nX * eyeDist * 0.56, y: leY - uY * eyeDist * (0.66 + yawRatio * 0.22) + nY * eyeDist * 0.56 };
+  const pCheekR = { x: reX + uX * eyeDist * (0.66 - yawRatio * 0.22) + nX * eyeDist * 0.56, y: reY + uY * eyeDist * (0.66 - yawRatio * 0.22) + nY * eyeDist * 0.56 };
 
-  const pCheekL = { x: x + w * 0.06, y: y + h * 0.56 };
-  const pCheekR = { x: x + w * 0.94, y: y + h * 0.56 };
+  // Mouth & Lips (Philtrum, Left Corner, Right Corner, Lower Lip)
+  const pPhiltrum = { x: (ntX + midMouthX) * 0.5, y: (ntY + midMouthY) * 0.5 };
+  const pMouthL = { x: lcX, y: lcY };
+  const pMouthR = { x: rcX, y: rcY };
+  const mouthH = measuredMouthWidth * 0.36;
+  const pLipBottom = { x: midMouthX + nX * mouthH, y: midMouthY + nY * mouthH };
 
-  const pMouthCornerL = { x: lcX, y: lcY };
-  const pMouthCornerR = { x: rcX, y: rcY };
-  const pUpperLipTop = { x: cx, y: y + h * 0.68 };
-  const pUpperLipL = { x: cx - w * 0.10, y: y + h * 0.69 };
-  const pUpperLipR = { x: cx + w * 0.10, y: y + h * 0.69 };
-  const pLowerLipBottom = { x: cx, y: y + h * 0.80 };
+  // Jawline & Chin
+  const jawDrop = eyeDist * (0.88 + pitchRatio * 0.40);
+  const pJawAngleL = { x: lcX - uX * eyeDist * (0.56 + yawRatio * 0.22) + nX * jawDrop * 0.52, y: lcY - uY * eyeDist * (0.56 + yawRatio * 0.22) + nY * jawDrop * 0.52 };
+  const pJawAngleR = { x: rcX + uX * eyeDist * (0.56 - yawRatio * 0.22) + nX * jawDrop * 0.52, y: rcY + uY * eyeDist * (0.56 - yawRatio * 0.22) + nY * jawDrop * 0.52 };
+  const pChinBottom = { x: midMouthX + nX * jawDrop, y: midMouthY + nY * jawDrop };
 
-  const pJawL = { x: x + w * 0.14, y: y + h * 0.86 };
-  const pJawR = { x: x + w * 0.86, y: y + h * 0.86 };
-  const pChin = { x: cx, y: y + h * 0.96 };
+  // All 28 Landmark Nodes
+  const nodes = [
+    pForeheadTopCenter, pForeheadTopL, pForeheadTopR, pGlabella,
+    pBrowInnerL, pBrowMidL, pBrowOuterL, pTempleL,
+    pBrowInnerR, pBrowMidR, pBrowOuterR, pTempleR,
+    pEyeCenterL, pEyeInnerL, pEyeOuterL, pEyeTopL, pEyeBottomL,
+    pEyeCenterR, pEyeInnerR, pEyeOuterR, pEyeTopR, pEyeBottomR,
+    pNoseBridgeTop, pNoseBridgeMid, pNoseTip, pNostrilL, pNostrilR,
+    pCheekL, pCheekR,
+    pPhiltrum, pMouthL, pMouthR, pLipBottom,
+    pJawAngleL, pJawAngleR, pChinBottom
+  ];
 
-  // Collect all constellation "sticks" (pairs of connected points)
-  const sticks: [{ x: number; y: number }, { x: number; y: number }][] = [
-    // Forehead facet
-    [pForeheadTop, pForeheadL],
-    [pForeheadTop, pForeheadR],
-    [pForeheadTop, pNoseBridgeTop],
-    [pForeheadL, pForeheadR],
-    [pForeheadL, pTempleL],
-    [pForeheadR, pTempleR],
-    [pForeheadL, pBrowMidL],
-    [pForeheadR, pBrowMidR],
+  // Exact Wireframe Triangular Facets from image.png
+  const edges: [{ x: number; y: number }, { x: number; y: number }][] = [
+    // Forehead arch & facets
+    [pForeheadTopCenter, pForeheadTopL],
+    [pForeheadTopCenter, pForeheadTopR],
+    [pForeheadTopL, pForeheadTopR],
+    [pForeheadTopCenter, pGlabella],
+    [pForeheadTopL, pGlabella],
+    [pForeheadTopR, pGlabella],
+    [pForeheadTopL, pTempleL],
+    [pForeheadTopR, pTempleR],
+    [pForeheadTopL, pBrowMidL],
+    [pForeheadTopR, pBrowMidR],
 
-    // Eyebrows & Glabella
+    // Eyebrows
+    [pTempleL, pBrowOuterL],
+    [pBrowOuterL, pBrowMidL],
     [pBrowMidL, pBrowInnerL],
-    [pBrowInnerL, pNoseBridgeTop],
-    [pBrowInnerR, pNoseBridgeTop],
-    [pBrowInnerR, pBrowMidR],
-    [pTempleL, pBrowMidL],
-    [pTempleR, pBrowMidR],
+    [pBrowInnerL, pGlabella],
+    [pTempleR, pBrowOuterR],
+    [pBrowOuterR, pBrowMidR],
+    [pBrowMidR, pBrowInnerR],
+    [pBrowInnerR, pGlabella],
 
-    // Eyes to Bridge and Temples
+    // Left Eye contour & star
     [pBrowInnerL, pEyeInnerL],
-    [pBrowInnerR, pEyeInnerR],
-    [pBrowMidL, pEyeL],
-    [pBrowMidR, pEyeR],
-    [pTempleL, pEyeOuterL],
-    [pTempleR, pEyeOuterR],
-    [pEyeOuterL, pEyeL],
-    [pEyeL, pEyeInnerL],
-    [pEyeInnerL, pNoseBridgeTop],
-    [pEyeInnerR, pNoseBridgeTop],
-    [pEyeInnerR, pEyeR],
-    [pEyeR, pEyeOuterR],
+    [pBrowMidL, pEyeTopL],
+    [pBrowOuterL, pEyeOuterL],
+    [pEyeInnerL, pEyeTopL],
+    [pEyeTopL, pEyeOuterL],
+    [pEyeOuterL, pEyeBottomL],
+    [pEyeBottomL, pEyeInnerL],
+    [pEyeCenterL, pEyeInnerL],
+    [pEyeCenterL, pEyeOuterL],
+    [pEyeCenterL, pEyeTopL],
+    [pEyeCenterL, pEyeBottomL],
 
-    // Nose facet
+    // Right Eye contour & star
+    [pBrowInnerR, pEyeInnerR],
+    [pBrowMidR, pEyeTopR],
+    [pBrowOuterR, pEyeOuterR],
+    [pEyeInnerR, pEyeTopR],
+    [pEyeTopR, pEyeOuterR],
+    [pEyeOuterR, pEyeBottomR],
+    [pEyeBottomR, pEyeInnerR],
+    [pEyeCenterR, pEyeInnerR],
+    [pEyeCenterR, pEyeOuterR],
+    [pEyeCenterR, pEyeTopR],
+    [pEyeCenterR, pEyeBottomR],
+
+    // Nose bridge and pyramid facets
+    [pGlabella, pNoseBridgeTop],
     [pNoseBridgeTop, pNoseBridgeMid],
     [pNoseBridgeMid, pNoseTip],
     [pNoseBridgeMid, pNostrilL],
@@ -248,133 +394,167 @@ export function drawBiometricFaceMesh(
     [pNoseTip, pNostrilR],
     [pEyeInnerL, pNoseBridgeMid],
     [pEyeInnerR, pNoseBridgeMid],
+    [pEyeInnerL, pNoseBridgeTop],
+    [pEyeInnerR, pNoseBridgeTop],
 
-    // Cheeks & Midface
+    // Cheeks & Temples
+    [pEyeOuterL, pTempleL],
+    [pEyeOuterR, pTempleR],
     [pEyeOuterL, pCheekL],
     [pEyeOuterR, pCheekR],
-    [pEyeL, pCheekL],
-    [pEyeR, pCheekR],
+    [pEyeBottomL, pCheekL],
+    [pEyeBottomR, pCheekR],
     [pNostrilL, pCheekL],
     [pNostrilR, pCheekR],
-    [pNostrilL, pMouthCornerL],
-    [pNostrilR, pMouthCornerR],
+    [pTempleL, pCheekL],
+    [pTempleR, pCheekR],
 
-    // Mouth facet
-    [pNoseTip, pUpperLipTop],
-    [pUpperLipTop, pUpperLipL],
-    [pUpperLipTop, pUpperLipR],
-    [pUpperLipL, pMouthCornerL],
-    [pUpperLipR, pMouthCornerR],
-    [pMouthCornerL, pLowerLipBottom],
-    [pMouthCornerR, pLowerLipBottom],
-    [pUpperLipTop, pLowerLipBottom],
+    // Mouth & Philtrum
+    [pNoseTip, pPhiltrum],
+    [pNostrilL, pPhiltrum],
+    [pNostrilR, pPhiltrum],
+    [pNostrilL, pMouthL],
+    [pNostrilR, pMouthR],
+    [pCheekL, pMouthL],
+    [pCheekR, pMouthR],
+    [pPhiltrum, pMouthL],
+    [pPhiltrum, pMouthR],
+    [pMouthL, pLipBottom],
+    [pMouthR, pLipBottom],
+    [pPhiltrum, pLipBottom],
 
-    // Jawline & Chin facet
-    [pCheekL, pJawL],
-    [pCheekR, pJawR],
-    [pMouthCornerL, pJawL],
-    [pMouthCornerR, pJawR],
-    [pLowerLipBottom, pChin],
-    [pJawL, pChin],
-    [pJawR, pChin],
-  ];
-
-  const nodes = [
-    pForeheadTop, pForeheadL, pForeheadR, pTempleL, pTempleR,
-    pBrowMidL, pBrowInnerL, pBrowInnerR, pBrowMidR,
-    pNoseBridgeTop, pNoseBridgeMid, pNoseTip, pNostrilL, pNostrilR,
-    pEyeOuterL, pEyeL, pEyeInnerL, pEyeInnerR, pEyeR, pEyeOuterR,
-    pCheekL, pCheekR,
-    pUpperLipTop, pUpperLipL, pUpperLipR, pMouthCornerL, pMouthCornerR, pLowerLipBottom,
-    pJawL, pJawR, pChin
+    // Jawline & Chin
+    [pCheekL, pJawAngleL],
+    [pCheekR, pJawAngleR],
+    [pMouthL, pJawAngleL],
+    [pMouthR, pJawAngleR],
+    [pJawAngleL, pChinBottom],
+    [pJawAngleR, pChinBottom],
+    [pMouthL, pChinBottom],
+    [pMouthR, pChinBottom],
+    [pLipBottom, pChinBottom],
   ];
 
   ctx.save();
 
-  // 1. Draw glowing biometric face mesh sticks
+  // Realtime Active Reading Scan Wave
+  const t = Date.now() * 0.003;
+  const scanProgress = (Math.sin(t) * 0.5 + 0.5);
+  const scanY = y + scanProgress * h;
+
+  // 1. Draw glowing wireframe facet edges (thin, crisp 1.25px white/cyan)
+  ctx.strokeStyle = wireColor;
+  ctx.lineWidth = 1.25;
   ctx.shadowColor = glowColor;
-  ctx.shadowBlur = 8;
-  ctx.strokeStyle = stickColor;
-  ctx.lineWidth = 1.8;
+  ctx.shadowBlur = 6;
   ctx.beginPath();
-  for (const [p1, p2] of sticks) {
+  for (const [p1, p2] of edges) {
     ctx.moveTo(p1.x, p1.y);
     ctx.lineTo(p2.x, p2.y);
   }
   ctx.stroke();
 
-  // 2. Draw glowing constellation nodes
+  // 2. Draw luminous landmark nodes (bright pure-white core with cyan electric glow)
   for (const pt of nodes) {
+    const distToScan = Math.abs(pt.y - scanY);
+    const isNearWave = distToScan < h * 0.12;
+    const waveFlare = isNearWave ? (1 - distToScan / (h * 0.12)) : 0;
+
+    // Outer cyan bloom
     ctx.beginPath();
-    ctx.arc(pt.x, pt.y, 3, 0, Math.PI * 2);
-    ctx.fillStyle = dotColor;
-    ctx.shadowColor = primaryColor;
-    ctx.shadowBlur = 10;
+    ctx.arc(pt.x, pt.y, 3.5 + waveFlare * 3, 0, Math.PI * 2);
+    ctx.fillStyle = waveFlare > 0 ? "rgba(255, 255, 255, 0.95)" : nodeHaloColor;
+    ctx.shadowColor = waveFlare > 0 ? "#ffffff" : primaryColor;
+    ctx.shadowBlur = waveFlare > 0 ? 15 : 8;
     ctx.fill();
 
-    // inner white core
+    // Solid white center point
     ctx.beginPath();
-    ctx.arc(pt.x, pt.y, 1.2, 0, Math.PI * 2);
+    ctx.arc(pt.x, pt.y, 1.6, 0, Math.PI * 2);
     ctx.fillStyle = "#ffffff";
     ctx.fill();
   }
 
-  // 3. Cybernetic Bounding Corner Reticles
+  // 3. Realtime Reading Sweep Line
+  ctx.strokeStyle = isSpoofActive
+    ? "rgba(245, 158, 11, 0.40)"
+    : isRecognized
+    ? "rgba(16, 185, 129, 0.35)"
+    : "rgba(0, 240, 255, 0.45)";
+  ctx.lineWidth = 1;
+  ctx.setLineDash([4, 4]);
+  ctx.beginPath();
+  ctx.moveTo(x - 8, scanY);
+  ctx.lineTo(x + w + 8, scanY);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // 4. Futuristic Precision Corner Brackets
   ctx.shadowBlur = 0;
   ctx.strokeStyle = primaryColor;
-  ctx.lineWidth = 2.5;
-  const bLen = Math.min(22, w * 0.25);
+  ctx.lineWidth = 2;
+  const bLen = Math.min(18, w * 0.2);
   ctx.beginPath();
   // Top Left
-  ctx.moveTo(x, y + bLen); ctx.lineTo(x, y); ctx.lineTo(x + bLen, y);
+  ctx.moveTo(x - 4, y - 4 + bLen); ctx.lineTo(x - 4, y - 4); ctx.lineTo(x - 4 + bLen, y - 4);
   // Top Right
-  ctx.moveTo(x + w - bLen, y); ctx.lineTo(x + w, y); ctx.lineTo(x + w, y + bLen);
+  ctx.moveTo(x + w + 4 - bLen, y - 4); ctx.lineTo(x + w + 4, y - 4); ctx.lineTo(x + w + 4, y - 4 + bLen);
   // Bottom Left
-  ctx.moveTo(x, y + h - bLen); ctx.lineTo(x, y + h); ctx.lineTo(x + bLen, y + h);
+  ctx.moveTo(x - 4, y + h + 4 - bLen); ctx.lineTo(x - 4, y + h + 4); ctx.lineTo(x - 4 + bLen, y + h + 4);
   // Bottom Right
-  ctx.moveTo(x + w - bLen, y + h); ctx.lineTo(x + w, y + h); ctx.lineTo(x + w, y + h - bLen);
+  ctx.moveTo(x + w + 4 - bLen, y + h + 4); ctx.lineTo(x + w + 4, y + h + 4); ctx.lineTo(x + w + 4, y + h + 4 - bLen);
   ctx.stroke();
 
-  // 4. Status HUD Header & Tag
-  if (isSpoof) {
-    ctx.fillStyle = "rgba(239, 68, 68, 0.95)";
-    ctx.fillRect(x, Math.max(0, y - 30), Math.max(190, w), 28);
-    ctx.fillStyle = "#ffffff";
+  // 5. High-Tech Cybernetic Status HUD & Biometric Telemetry
+  if (isSpoofActive) {
+    ctx.fillStyle = "rgba(245, 158, 11, 0.95)";
+    ctx.fillRect(x, Math.max(0, y - 30), Math.max(240, w), 26);
+    ctx.fillStyle = "#000000";
     ctx.font = "bold 11px sans-serif";
-    ctx.fillText("⚠ SPOOF / LIVENESS ALERT", x + 8, Math.max(0, y - 30) + 18);
+    ctx.fillText("⚠ SPOOF ALERT: 2D PHOTO / SCREEN DETECTED", x + 8, Math.max(0, y - 30) + 17);
+
+    // Warning Footer
+    ctx.fillStyle = "rgba(185, 28, 28, 0.95)";
+    ctx.fillRect(x, y + h + 8, 220, 22);
+    ctx.fillStyle = "#ffffff";
+    ctx.font = "bold 10px monospace";
+    ctx.fillText("✕ BIOMETRIC ATTENDANCE REJECTED", x + 8, y + h + 23);
   } else if (isRecognized) {
     const studentLabel = labelInfo?.name
-      ? `${labelInfo.name} (${labelInfo.roll || ""}) • ${((labelInfo.confidence || 0.88) * 100).toFixed(0)}% MATCH`
-      : "MATCHED STUDENT • 92% CONFIDENCE";
-    ctx.font = "bold 12px sans-serif";
+      ? `✓ ${labelInfo.name} (${labelInfo.roll || ""}) • ${((labelInfo.confidence || 0.92) * 100).toFixed(0)}% MATCH`
+      : "✓ VERIFIED STUDENT PROFILE";
+    ctx.font = "bold 11px sans-serif";
     const tWidth = ctx.measureText(studentLabel).width;
     ctx.fillStyle = "rgba(16, 185, 129, 0.95)";
-    ctx.fillRect(x, Math.max(0, y - 32), Math.max(tWidth + 20, w), 30);
+    ctx.fillRect(x, Math.max(0, y - 30), Math.max(tWidth + 18, w), 26);
     ctx.fillStyle = "#ffffff";
-    ctx.fillText(studentLabel, x + 8, Math.max(0, y - 32) + 19);
+    ctx.fillText(studentLabel, x + 8, Math.max(0, y - 30) + 17);
 
     // Green Verified Footer
-    ctx.fillStyle = "rgba(2, 132, 199, 0.9)";
-    ctx.fillRect(x, y + h + 6, 160, 22);
+    ctx.fillStyle = "rgba(16, 185, 129, 0.92)";
+    ctx.fillRect(x, y + h + 8, 235, 22);
     ctx.fillStyle = "#ffffff";
     ctx.font = "bold 10px monospace";
-    ctx.fillText("✓ BIOMETRIC MATCHED", x + 8, y + h + 21);
+    ctx.fillText("✓ ATTENDANCE RECORDED (PRESENT)", x + 8, y + h + 23);
   } else {
-    // Red UNMATCHED / UNKNOWN FACE
-    const unmatchLabel = "✕ UNMATCHED FACE / UNKNOWN";
-    ctx.font = "bold 11px sans-serif";
-    const tWidth = ctx.measureText(unmatchLabel).width;
-    ctx.fillStyle = "rgba(239, 68, 68, 0.95)";
-    ctx.fillRect(x, Math.max(0, y - 30), Math.max(tWidth + 20, w), 28);
-    ctx.fillStyle = "#ffffff";
-    ctx.fillText(unmatchLabel, x + 8, Math.max(0, y - 30) + 18);
-
-    // Red Warning Footer
-    ctx.fillStyle = "rgba(185, 28, 28, 0.9)";
-    ctx.fillRect(x, y + h + 6, 150, 22);
-    ctx.fillStyle = "#ffffff";
+    // Reading in Realtime / Verifying
+    const isOutsider = labelInfo?.statusTag === "NOT_IN_CLASSROOM";
+    const tagText = isOutsider
+      ? "✕ NOT IN THIS CLASSROOM COHORT"
+      : `READING FACIAL MESH • ${(eyeDist).toFixed(0)}px EYE-DIST`;
     ctx.font = "bold 10px monospace";
-    ctx.fillText("✕ NO PROFILE FOUND", x + 8, y + h + 21);
+    const tWidth = ctx.measureText(tagText).width;
+    ctx.fillStyle = isOutsider ? "rgba(239, 68, 68, 0.95)" : "rgba(15, 23, 42, 0.90)";
+    ctx.fillRect(x, Math.max(0, y - 28), Math.max(tWidth + 16, w), 24);
+    ctx.fillStyle = isOutsider ? "#ffffff" : "#38bdf8";
+    ctx.fillText(tagText, x + 8, Math.max(0, y - 28) + 16);
+
+    // Live Geometry Metrics Footer
+    ctx.fillStyle = "rgba(15, 23, 42, 0.85)";
+    ctx.fillRect(x, y + h + 8, Math.max(220, w), 20);
+    ctx.fillStyle = "#94a3b8";
+    ctx.font = "9px monospace";
+    ctx.fillText(`YAW: ${(yawRatio * 25).toFixed(1)}° | PITCH: ${(pitchRatio * 20).toFixed(1)}° | 128-D READING`, x + 6, y + h + 22);
   }
 
   ctx.restore();
@@ -400,7 +580,17 @@ export default function CCTVPage() {
     message: string;
     suggestions: string[];
   } | null>(null);
-  const [simulatedMatchStatus, setSimulatedMatchStatus] = useState<"MATCHED" | "UNMATCHED">("MATCHED");
+  const [simulatedMatchStatus, setSimulatedMatchStatus] = useState<"MATCHED" | "MULTI" | "OUTSIDER" | "SPOOF" | "UNMATCHED">("MATCHED");
+  const [liveAttendanceLog, setLiveAttendanceLog] = useState<
+    { student_id: number; name: string; roll: string; confidence: number; time: string; status: string }[]
+  >([]);
+  const [classroomScopeInfo, setClassroomScopeInfo] = useState<{
+    classroom?: string;
+    subject_code?: string;
+    subject_name?: string;
+    enrolled_count: number;
+    scoped_to_classroom: boolean;
+  } | null>(null);
 
   // Video & Canvas Refs (Permanently mounted to prevent null ref bugs)
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -496,7 +686,46 @@ export default function CCTVPage() {
   ]);
   const [selectedSlotId, setSelectedSlotId] = useState<number>(1);
 
-  // New Camera Form
+  // Classroom Selector & Active Class Resolution
+  const [classroomsList, setClassroomsList] = useState<string[]>([
+    "Room 302",
+    "Room 101",
+    "Room 102",
+    "Room 201",
+    "Computer Lab 1",
+    "Electronics Lab",
+  ]);
+  const [selectedClassroom, setSelectedClassroom] = useState<string>("Room 302");
+  const [activeClassInfo, setActiveClassInfo] = useState<ActiveClassInfo | null>(null);
+  const [loadingActiveClass, setLoadingActiveClass] = useState(false);
+
+  // CCTV Camera & Classroom Assignment State
+  const [showAddCameraModal, setShowAddCameraModal] = useState(false);
+  const [assignClassroomMode, setAssignClassroomMode] = useState<"EXISTING" | "NEW">("EXISTING");
+  const [newClassroomName, setNewClassroomName] = useState("");
+  const [newClassroomBuilding, setNewClassroomBuilding] = useState("Main Academic Complex");
+  const [newClassroomCapacity, setNewClassroomCapacity] = useState(60);
+
+  const [cameraForm, setCameraForm] = useState({
+    name: "",
+    classroom: "Room 302",
+    camera_type: "RTSP", // "RTSP" | "HTTP_MJPEG" | "WEBCAM" | "VIRTUAL"
+    stream_url: "rtsp://admin:admin123@192.168.1.100:554/stream1",
+    crossing_direction: "LEFT_TO_RIGHT_ENTRY",
+    fps: 25,
+    resolution: "1920x1080",
+    rtsp_ip: "192.168.1.100",
+    rtsp_port: "554",
+    rtsp_channel: "1",
+    rtsp_user: "admin",
+    rtsp_pass: "admin123",
+    usb_index: "0",
+  });
+  const [savingCamera, setSavingCamera] = useState(false);
+  const [addCamError, setAddCamError] = useState<string | null>(null);
+  const [addCamSuccess, setAddCamSuccess] = useState<string | null>(null);
+
+  // New Camera Form (Legacy fallback)
   const [newCam, setNewCam] = useState({
     name: "",
     stream_url: "0",
@@ -506,6 +735,49 @@ export default function CCTVPage() {
     fps: 25,
     resolution: "1920x1080",
   });
+
+  const loadClassrooms = async () => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/academic/classrooms`, {
+        headers: getAuthHeaders(token),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const names = data.map((r: any) => r.room_number || r.name).filter(Boolean);
+        if (names.length > 0) {
+          setClassroomsList(names);
+        }
+      }
+    } catch {
+      // Fallback defaults are already set
+    }
+  };
+
+  const fetchActiveClass = async (room: string) => {
+    try {
+      setLoadingActiveClass(true);
+      const res = await fetch(`${API_BASE_URL}/timetable/active-class?classroom=${encodeURIComponent(room)}`, {
+        headers: getAuthHeaders(token),
+      });
+      if (res.ok) {
+        const data: ActiveClassInfo = await res.json();
+        setActiveClassInfo(data);
+        if (data.timetable_id) {
+          setSelectedSlotId(data.timetable_id);
+        }
+        // Auto-select corresponding camera if available
+        if (data.camera_id) {
+          const matchCam = cameras.find((c) => c.id === data.camera_id);
+          if (matchCam) setSelectedCam(matchCam);
+        }
+      }
+    } catch (err) {
+      console.error("Failed to resolve active class:", err);
+    } finally {
+      setLoadingActiveClass(false);
+    }
+  };
+
 
   const loadCameras = async () => {
     try {
@@ -562,7 +834,18 @@ export default function CCTVPage() {
   useEffect(() => {
     loadCameras();
     loadTimetableSlots();
+    loadClassrooms();
   }, [token]);
+
+  useEffect(() => {
+    if (selectedClassroom) {
+      fetchActiveClass(selectedClassroom);
+      const timer = setInterval(() => {
+        fetchActiveClass(selectedClassroom);
+      }, 25000);
+      return () => clearInterval(timer);
+    }
+  }, [selectedClassroom, token]);
 
   // Clean toggle of Laptop Webcam
   const toggleLaptopWebcam = async () => {
@@ -630,7 +913,7 @@ export default function CCTVPage() {
         ) {
           setCameraLockError({
             isLocked: true,
-            errorType: "Camera Disconnected / Privacy Switch ON",
+            errorType: "Hardware Camera Disconnected (Lenovo LOQ E-Shutter Switch)",
             message:
               "Requested device not found. Windows reports the webcam is disconnected at the hardware level (Code 45 CM_PROB_PHANTOM). On Lenovo laptops, this happens when the privacy shutter is closed or Lenovo Vantage Camera Privacy Mode is turned ON.",
             suggestions: [
@@ -746,15 +1029,6 @@ export default function CCTVPage() {
         ctx.fillStyle = "#475569";
         ctx.fillText("Classroom 302 • Section A • Dr. Alan Turing", canvas.width / 2, 175);
 
-        // Seated Student Body
-        ctx.fillStyle = "#2563eb";
-        ctx.beginPath();
-        ctx.arc(canvas.width / 2, 355, 52, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.beginPath();
-        ctx.ellipse(canvas.width / 2, 455, 100, 65, 0, 0, Math.PI, true);
-        ctx.fill();
-
         // Laser scan line
         scanY += scanDir;
         if (scanY > 520 || scanY < 90) scanDir = -scanDir;
@@ -765,26 +1039,114 @@ export default function CCTVPage() {
         ctx.fillStyle = grad;
         ctx.fillRect(0, scanY, canvas.width, 3);
 
-        // 3D Biometric Face Mesh Reticle (Sticks in Green if Matched, in Red if Unmatched)
-        const fx = canvas.width / 2 - 110;
-        const fy = 290;
-        const fw = 220;
-        const fh = 200;
+        // Render Biometric Face Mesh Reticles based on simulation mode
+        if (simulatedMatchStatus === "MULTI") {
+          // Student 1 (Classroom Student Left)
+          ctx.fillStyle = "#2563eb";
+          ctx.beginPath();
+          ctx.arc(380, 355, 48, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.beginPath();
+          ctx.ellipse(380, 455, 90, 60, 0, 0, Math.PI, true);
+          ctx.fill();
 
-        const isMatch = simulatedMatchStatus === "MATCHED";
-        drawBiometricFaceMesh(
-          ctx,
-          fx,
-          fy,
-          fw,
-          fh,
-          isMatch,
-          false,
-          null,
-          isMatch
-            ? { name: "Kushal Student", roll: "CS-2024-001", confidence: 0.94 }
-            : undefined
-        );
+          drawBiometricFaceMesh(
+            ctx,
+            280,
+            290,
+            200,
+            190,
+            true,
+            false,
+            null,
+            { name: "Kushal Student", roll: "CS-2024-001", confidence: 0.95, statusTag: "PRESENT" }
+          );
+
+          // Student 2 (Classroom Student Right)
+          ctx.fillStyle = "#0284c7";
+          ctx.beginPath();
+          ctx.arc(880, 355, 48, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.beginPath();
+          ctx.ellipse(880, 455, 90, 60, 0, 0, Math.PI, true);
+          ctx.fill();
+
+          drawBiometricFaceMesh(
+            ctx,
+            780,
+            290,
+            200,
+            190,
+            true,
+            false,
+            null,
+            { name: "Aarav Sharma", roll: "CS-2024-002", confidence: 0.92, statusTag: "PRESENT" }
+          );
+        } else {
+          // Single Student Body (Center)
+          ctx.fillStyle = simulatedMatchStatus === "OUTSIDER" ? "#dc2626" : "#2563eb";
+          ctx.beginPath();
+          ctx.arc(canvas.width / 2, 355, 52, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.beginPath();
+          ctx.ellipse(canvas.width / 2, 455, 100, 65, 0, 0, Math.PI, true);
+          ctx.fill();
+
+          const fx = canvas.width / 2 - 110;
+          const fy = 290;
+          const fw = 220;
+          const fh = 200;
+
+          if (simulatedMatchStatus === "MATCHED") {
+            drawBiometricFaceMesh(
+              ctx,
+              fx,
+              fy,
+              fw,
+              fh,
+              true,
+              false,
+              null,
+              { name: "Kushal Student", roll: "CS-2024-001", confidence: 0.94, statusTag: "PRESENT" }
+            );
+          } else if (simulatedMatchStatus === "OUTSIDER") {
+            drawBiometricFaceMesh(
+              ctx,
+              fx,
+              fy,
+              fw,
+              fh,
+              false,
+              false,
+              null,
+              { statusTag: "NOT_IN_CLASSROOM" }
+            );
+          } else if (simulatedMatchStatus === "SPOOF") {
+            drawBiometricFaceMesh(
+              ctx,
+              fx,
+              fy,
+              fw,
+              fh,
+              false,
+              true,
+              null,
+              { statusTag: "SPOOF_ALERT" }
+            );
+          } else {
+            drawBiometricFaceMesh(
+              ctx,
+              fx,
+              fy,
+              fw,
+              fh,
+              false,
+              false,
+              null,
+              { statusTag: "UNREGISTERED" }
+            );
+          }
+        }
       };
 
       animInterval = setInterval(drawVirtualFrame, 50);
@@ -886,149 +1248,246 @@ export default function CCTVPage() {
     }
   };
 
-  // Live Recognition Loop on Laptop Webcam
+  // Live Recognition Loop on Laptop Webcam (High-Speed Classroom-Scoped Multi-Face Engine)
   useEffect(() => {
-    let intervalId: any;
-    if (useLaptopCam && recognitionActive) {
-      intervalId = setInterval(async () => {
-        if (!videoRef.current || !overlayCanvasRef.current) return;
-        const video = videoRef.current;
-        const canvas = overlayCanvasRef.current;
-        if (video.videoWidth === 0 || video.videoHeight === 0) return;
+    let active = true;
+    let isProcessing = false;
+    let timerId: any = null;
 
+    const processFrame = async () => {
+      if (!active || !useLaptopCam || !recognitionActive) return;
+      if (!videoRef.current || !overlayCanvasRef.current) return;
+      const video = videoRef.current;
+      const canvas = overlayCanvasRef.current;
+      if (video.videoWidth === 0 || video.videoHeight === 0) {
+        timerId = setTimeout(processFrame, 200);
+        return;
+      }
+
+      if (isProcessing) {
+        timerId = setTimeout(processFrame, 150);
+        return;
+      }
+
+      isProcessing = true;
+
+      try {
         canvas.width = video.videoWidth;
         canvas.height = video.videoHeight;
         const ctx = canvas.getContext("2d");
-        if (!ctx) return;
+        if (!ctx) {
+          isProcessing = false;
+          return;
+        }
+
+        // Optimize resolution for high-speed multi-face inference (800px width limit)
+        const targetW = Math.min(800, video.videoWidth);
+        const scaleFactor = video.videoWidth / targetW;
+        const targetH = Math.round(video.videoHeight / scaleFactor);
 
         const tempCanvas = document.createElement("canvas");
-        tempCanvas.width = video.videoWidth;
-        tempCanvas.height = video.videoHeight;
+        tempCanvas.width = targetW;
+        tempCanvas.height = targetH;
         const tempCtx = tempCanvas.getContext("2d");
-        if (!tempCtx) return;
-        tempCtx.drawImage(video, 0, 0, tempCanvas.width, tempCanvas.height);
-        const dataUrl = tempCanvas.toDataURL("image/jpeg", 0.75);
+        if (!tempCtx) {
+          isProcessing = false;
+          return;
+        }
 
-        try {
-          const res = await fetch(`${API_BASE_URL}/biometrics/recognize`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              image_base64: dataUrl,
-              timetable_id: autoAttendance && currentSlot ? currentSlot.id : undefined,
-              auto_attendance: autoAttendance,
-            }),
-          });
-          if (res.ok) {
-            const data = await res.json();
-            const recList: RecognizedPerson[] = data.recognized_students || [];
-            const allFaces: DetectedFaceItem[] = data.all_detected_faces || [];
-            setRecognizedFaces(recList);
-            setAllDetectedFaces(allFaces);
-            setFacesDetectedCount(data.faces_detected || allFaces.length);
+        tempCtx.drawImage(video, 0, 0, targetW, targetH);
+        const dataUrl = tempCanvas.toDataURL("image/jpeg", 0.70);
 
-            // Auto-Attendance trigger
-            if (autoAttendance && recList.length > 0 && !portalAcceptancePreview) {
-              const firstRec = recList[0];
-              setAttendanceResult(
-                `✓ Auto-Attendance Recorded: ${firstRec.full_name} (${firstRec.roll_number}) marked PRESENT for Period ${currentSlot.period_number}`
-              );
-              setPortalAcceptancePreview({
-                student_name: firstRec.full_name,
-                roll_number: firstRec.roll_number,
-                department: "Dept of Computer Science & Engineering",
-                section: currentSlot.section,
-                semester: "Sem 5",
-                period_number: currentSlot.period_number,
-                subject_code: currentSlot.subject_code || "CS301",
-                subject_name: currentSlot.subject_name || "Computer Networks",
-                classroom: currentSlot.classroom,
-                faculty_name: currentSlot.faculty_name || "Dr. Alan Turing",
-                timestamp: new Date().toLocaleTimeString(),
-                verification_method: "Auto-Attendance AI Biometrics",
-                confidence: firstRec.confidence || 0.88,
-                liveness_score: firstRec.liveness_score || 0.95,
-                status: "PRESENT",
-                accepted_students: recList.map((r) => ({
-                  student_name: r.full_name,
-                  roll_number: r.roll_number,
-                  confidence: r.confidence,
-                  verification_method: "FACE_RECOGNITION",
-                  status: "PRESENT",
-                })),
-              });
-            }
+        const res = await fetch(`${API_BASE_URL}/biometrics/recognize`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            image_base64: dataUrl,
+            timetable_id: currentSlot ? currentSlot.id : undefined,
+            classroom: currentSlot ? currentSlot.classroom : undefined,
+            auto_attendance: autoAttendance,
+          }),
+        });
 
-            // Clear overlay canvas
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
+        if (res.ok && active) {
+          const data = await res.json();
+          const recList: RecognizedPerson[] = data.recognized_students || [];
+          const allFaces: DetectedFaceItem[] = data.all_detected_faces || [];
+          const classroomInfo = data.classroom_info;
 
-            // Draw HUD Banner
-            ctx.fillStyle = "rgba(15, 23, 42, 0.88)";
-            ctx.fillRect(16, 16, Math.min(canvas.width - 32, 520), 32);
-            ctx.strokeStyle = "rgba(56, 189, 248, 0.4)";
-            ctx.lineWidth = 1.5;
-            ctx.strokeRect(16, 16, Math.min(canvas.width - 32, 520), 32);
-            ctx.fillStyle = "#38bdf8";
-            ctx.font = "bold 11px monospace";
-            ctx.fillText(
-              `AI FACE TRACKING • FACES: ${data.faces_detected || allFaces.length} • RECOGNIZED: ${recList.length}`,
-              26,
-              37
-            );
+          setRecognizedFaces(recList);
+          setAllDetectedFaces(allFaces);
+          setFacesDetectedCount(data.faces_detected || allFaces.length);
+          if (classroomInfo) {
+            setClassroomScopeInfo(classroomInfo);
+          }
 
-            // Draw 3D Biometric Face Mesh Reticles (Sticks in Green if Matched, in Red if Unmatched)
-            if (allFaces.length > 0) {
-              allFaces.forEach((face, idx) => {
-                const [x, y, w, h] = face.bounding_box;
-                if (!w || !h) return;
-
-                drawBiometricFaceMesh(
-                  ctx,
-                  x,
-                  y,
-                  w,
-                  h,
-                  face.is_recognized,
-                  face.spoof_detected,
-                  face.landmarks,
-                  {
-                    name: face.full_name || undefined,
-                    roll: face.roll_number || undefined,
-                    confidence: face.confidence,
-                  }
-                );
-              });
-            } else if (recList.length > 0) {
+          // Real-time Attendance Recording for all recognized classroom students
+          if (recList.length > 0) {
+            setLiveAttendanceLog((prev) => {
+              const map = new Map(prev.map((p) => [p.student_id, p]));
               recList.forEach((st) => {
-                const [x, y, w, h] = st.bounding_box;
-                drawBiometricFaceMesh(
-                  ctx,
-                  x,
-                  y,
-                  w,
-                  h,
-                  true,
-                  st.spoof_detected,
-                  null,
-                  {
-                    name: st.full_name,
-                    roll: st.roll_number,
-                    confidence: st.confidence,
-                  }
-                );
+                map.set(st.student_id, {
+                  student_id: st.student_id,
+                  name: st.full_name,
+                  roll: st.roll_number,
+                  confidence: st.confidence,
+                  time: new Date().toLocaleTimeString(),
+                  status: "PRESENT",
+                });
               });
+              return Array.from(map.values()).slice(0, 15);
+            });
+
+            if (autoAttendance) {
+              setAttendanceResult(
+                `✓ Verified ${recList.length} Classroom Student(s) PRESENT for Period ${currentSlot.period_number} (${currentSlot.classroom})`
+              );
             }
           }
-        } catch {
-          // Frame rate throttle fallback
+
+          // Clear overlay canvas
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+          // Draw Cybernetic HUD Header Bar
+          const hudW = Math.min(canvas.width - 32, 700);
+          ctx.fillStyle = "rgba(15, 23, 42, 0.90)";
+          ctx.fillRect(16, 16, hudW, 36);
+          ctx.strokeStyle = "rgba(56, 189, 248, 0.4)";
+          ctx.lineWidth = 1.5;
+          ctx.strokeRect(16, 16, hudW, 36);
+
+          ctx.fillStyle = "#38bdf8";
+          ctx.font = "bold 11px monospace";
+          const classLabel = classroomInfo?.classroom || currentSlot.classroom;
+          const subLabel = classroomInfo?.subject_code || currentSlot.subject_code || "CS301";
+          const enrolledCount = classroomInfo?.enrolled_count || 45;
+          ctx.fillText(
+            `CLASSROOM: ${classLabel} • SUB: ${subLabel} • ENROLLED: ${enrolledCount} • DETECTED: ${allFaces.length} • MARKED: ${recList.length}`,
+            26,
+            38
+          );
+
+          // Render 3D Biometric Face Mesh Reticles for all detected faces (Multi-Face Tracking)
+          if (allFaces.length > 0) {
+            allFaces.forEach((face) => {
+              const [rx, ry, rw, rh] = face.bounding_box;
+              if (!rw || !rh) return;
+
+              // Scale coordinates to match original full-size canvas
+              const x = rx * scaleFactor;
+              const y = ry * scaleFactor;
+              const w = rw * scaleFactor;
+              const h = rh * scaleFactor;
+
+              const scaledLandmarks = face.landmarks
+                ? face.landmarks.map(([lx, ly]) => [lx * scaleFactor, ly * scaleFactor])
+                : null;
+
+              drawBiometricFaceMesh(
+                ctx,
+                x,
+                y,
+                w,
+                h,
+                face.is_recognized,
+                face.spoof_detected,
+                scaledLandmarks,
+                {
+                  name: face.full_name || undefined,
+                  roll: face.roll_number || undefined,
+                  confidence: face.confidence,
+                  statusTag: face.verification_status,
+                }
+              );
+            });
+          }
         }
-      }, 750);
+      } catch {
+        // Continue on frame drop
+      } finally {
+        isProcessing = false;
+        if (active) {
+          timerId = setTimeout(processFrame, 180); // High-speed 4-5 FPS cycle
+        }
+      }
+    };
+
+    if (useLaptopCam && recognitionActive) {
+      processFrame();
     }
 
     return () => {
-      if (intervalId) clearInterval(intervalId);
+      active = false;
+      if (timerId) clearTimeout(timerId);
     };
   }, [useLaptopCam, recognitionActive, autoAttendance, currentSlot]);
+
+  // Camera & Classroom Deployment Handler
+  const handleSaveCamera = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSavingCamera(true);
+    setAddCamError(null);
+    setAddCamSuccess(null);
+
+    try {
+      const targetRoom = (assignClassroomMode === "NEW" ? newClassroomName.trim() : cameraForm.classroom.trim());
+      if (!targetRoom) {
+        throw new Error("Classroom name is required. Please select or enter a classroom.");
+      }
+
+      let finalStreamUrl = cameraForm.stream_url.trim();
+      if (cameraForm.camera_type === "RTSP") {
+        if (cameraForm.rtsp_ip) {
+          const auth = cameraForm.rtsp_user ? `${cameraForm.rtsp_user}:${cameraForm.rtsp_pass || ""}@` : "";
+          finalStreamUrl = `rtsp://${auth}${cameraForm.rtsp_ip}:${cameraForm.rtsp_port || "554"}/stream${cameraForm.rtsp_channel || "1"}`;
+        }
+      } else if (cameraForm.camera_type === "WEBCAM") {
+        finalStreamUrl = cameraForm.usb_index || "0";
+      } else if (cameraForm.camera_type === "VIRTUAL") {
+        finalStreamUrl = "demo";
+      }
+
+      const payload = {
+        name: cameraForm.name.trim() || `${targetRoom} Overhead CCTV`,
+        stream_url: finalStreamUrl,
+        camera_type: cameraForm.camera_type,
+        classroom: targetRoom,
+        crossing_direction: cameraForm.crossing_direction,
+        fps: Number(cameraForm.fps),
+        resolution: cameraForm.resolution,
+        is_active: true,
+      };
+
+      const res = await fetch(`${API_BASE_URL}/cctv/cameras`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...getAuthHeaders(token),
+        },
+        body: JSON.stringify(payload),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.detail || "Failed to add CCTV camera stream.");
+      }
+
+      await Promise.all([loadCameras(), loadClassrooms()]);
+      setSelectedClassroom(targetRoom);
+      fetchActiveClass(targetRoom);
+      setSelectedCam(data);
+
+      setAddCamSuccess(`Camera "${data.name}" deployed to ${targetRoom} successfully!`);
+      setTimeout(() => {
+        setShowAddCameraModal(false);
+        setAddCamSuccess(null);
+      }, 1200);
+    } catch (err: unknown) {
+      setAddCamError(err instanceof Error ? err.message : "Error saving camera configuration.");
+    } finally {
+      setSavingCamera(false);
+    }
+  };
 
   // Camera Management Helpers
   const handleTestCamera = async (camId: number) => {
@@ -1119,29 +1578,48 @@ export default function CCTVPage() {
       {/* ============================================================================== */}
       {/* 2. PROMINENT CLASS SLOT & CAMERA ACTION TOOLBAR */}
       {/* ============================================================================== */}
-      <div className="p-4 rounded-2xl bg-white border border-slate-200 shadow-sm flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-        {/* Class Slot Selector */}
-        <div className="flex flex-col sm:flex-row sm:items-center gap-3">
-          <div className="flex items-center gap-2 text-slate-700 font-bold text-xs uppercase tracking-wider shrink-0">
-            <BookOpen className="w-4 h-4 text-blue-600" />
-            <span>Class Slot:</span>
+      <div className="space-y-3">
+        <div className="p-4 rounded-2xl bg-white border border-slate-200 shadow-sm flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+          {/* Classroom Selector */}
+          <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+            <div className="flex items-center gap-2 text-slate-700 font-bold text-xs uppercase tracking-wider shrink-0">
+              <MapPin className="w-4 h-4 text-blue-600" />
+              <span>Monitored Classroom:</span>
+            </div>
+            <select
+              id="classroom-selector"
+              value={selectedClassroom}
+              onChange={(e) => {
+                setSelectedClassroom(e.target.value);
+                fetchActiveClass(e.target.value);
+              }}
+              className="px-3.5 py-2 rounded-xl bg-slate-50 border border-slate-300 text-slate-900 font-bold text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 shadow-inner cursor-pointer"
+            >
+              {classroomsList.map((room) => (
+                <option key={room} value={room}>
+                  {room}
+                </option>
+              ))}
+            </select>
+
+            {loadingActiveClass && (
+              <span className="text-[11px] font-medium text-slate-400 flex items-center gap-1.5 animate-pulse">
+                <RotateCw className="w-3 h-3 animate-spin text-blue-600" /> Resolving timetable...
+              </span>
+            )}
           </div>
-          <select
-            id="period-slot-selector"
-            value={selectedSlotId}
-            onChange={(e) => setSelectedSlotId(Number(e.target.value))}
-            className="px-3.5 py-2 rounded-xl bg-slate-50 border border-slate-300 text-slate-900 font-semibold text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 shadow-inner max-w-md"
-          >
-            {timetableSlots.map((s) => (
-              <option key={s.id} value={s.id}>
-                Period {s.period_number}: {s.subject_name || "Computer Networks"} ({s.start_time} - {s.end_time}) • Sec {s.section} • {s.classroom}
-              </option>
-            ))}
-          </select>
-        </div>
+
 
         {/* Action Controls */}
         <div className="flex flex-wrap items-center gap-2.5">
+          {/* Add CCTV & Assign Classroom Button */}
+          <button
+            onClick={() => setShowAddCameraModal(true)}
+            className="flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold shadow-xs transition cursor-pointer"
+          >
+            <Plus className="w-4 h-4" />
+            <span>Add CCTV / Assign Classroom</span>
+          </button>
           {/* Laptop Webcam Toggle */}
           <button
             id="btn-laptop-webcam"
@@ -1191,68 +1669,80 @@ export default function CCTVPage() {
             />
             <span>Auto-Attendance: {autoAttendance ? "ON" : "OFF"}</span>
           </button>
+        </div>
+      </div>
 
-          {/* Virtual Sim Feed Fallback */}
-          <button
-            onClick={startVirtualSimulation}
-            className={`flex items-center gap-1.5 px-3 py-2.5 rounded-xl text-xs font-medium border transition ${
-              useVirtualCam
-                ? "bg-purple-600 text-white border-purple-600"
-                : "bg-white text-purple-700 border-purple-200 hover:bg-purple-50"
-            }`}
-            title="Use simulated feed if camera hardware is locked"
-          >
-            <Sparkles className="w-3.5 h-3.5" />
-            <span>Sim Feed</span>
-          </button>
+      {/* ACTIVE CLASS VS NO CLASS SCHEDULED BANNER */}
+      {activeClassInfo && (
+        <div className="animate-in fade-in duration-200">
+          {activeClassInfo.has_conflict ? (
+            <div className="p-3.5 rounded-2xl bg-rose-50 border border-rose-200 text-rose-800 flex items-center gap-3 shadow-xs">
+              <AlertCircle className="w-5 h-5 text-rose-600 shrink-0" />
+              <div className="text-xs">
+                <span className="font-bold">Scheduling Conflict: </span>
+                <span>{activeClassInfo.conflict_message}</span>
+              </div>
+            </div>
+          ) : activeClassInfo.has_active_class ? (
+            <div className="p-3.5 rounded-2xl bg-emerald-50/90 border border-emerald-200 text-emerald-950 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
+              <div className="flex items-center gap-3">
+                <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-ping shrink-0" />
+                <div>
+                  <div className="text-xs font-extrabold flex flex-wrap items-center gap-2">
+                    <span className="bg-emerald-200/80 text-emerald-900 px-2 py-0.5 rounded text-[11px]">
+                      Period {activeClassInfo.period_number} Active
+                    </span>
+                    <span>
+                      {activeClassInfo.subject_code} &bull; {activeClassInfo.subject_name}
+                    </span>
+                  </div>
+                  <div className="text-[11px] text-emerald-700 mt-0.5">
+                    Section {activeClassInfo.section} &bull; Prof. {activeClassInfo.faculty_name} &bull;{" "}
+                    <span className="font-mono font-semibold">
+                      {activeClassInfo.start_time} - {activeClassInfo.end_time}
+                    </span>
+                  </div>
+                </div>
+              </div>
 
-          {/* Biometric Mesh Sticks Preview Selector */}
-          {useVirtualCam && (
-            <div className="flex items-center gap-1.5 p-1 rounded-xl bg-purple-50 border border-purple-200">
-              <span className="text-[11px] font-bold text-purple-900 px-1.5">Biometric Sticks:</span>
-              <button
-                onClick={() => {
-                  setSimulatedMatchStatus("MATCHED");
-                  setRecognizedFaces([
-                    {
-                      student_id: 1,
-                      roll_number: "CS-2024-001",
-                      full_name: "Kushal Student",
-                      confidence: 0.94,
-                      bounding_box: [160, 100, 200, 220],
-                      liveness_score: 0.98,
-                      spoof_detected: false,
-                      verification_method: "FACE_RECOGNITION",
-                    },
-                  ]);
-                }}
-                className={`px-2.5 py-1 rounded-lg text-xs font-bold transition flex items-center gap-1 ${
-                  simulatedMatchStatus === "MATCHED"
-                    ? "bg-emerald-600 text-white shadow-sm ring-1 ring-emerald-400"
-                    : "bg-white text-slate-700 hover:bg-slate-100"
-                }`}
-              >
-                <span className="w-2 h-2 rounded-full bg-emerald-400" />
-                <span>Matched (Green Sticks)</span>
-              </button>
-              <button
-                onClick={() => {
-                  setSimulatedMatchStatus("UNMATCHED");
-                  setRecognizedFaces([]);
-                }}
-                className={`px-2.5 py-1 rounded-lg text-xs font-bold transition flex items-center gap-1 ${
-                  simulatedMatchStatus === "UNMATCHED"
-                    ? "bg-red-600 text-white shadow-sm ring-1 ring-red-400"
-                    : "bg-white text-slate-700 hover:bg-slate-100"
-                }`}
-              >
-                <span className="w-2 h-2 rounded-full bg-red-400" />
-                <span>Unmatched (Red Sticks)</span>
-              </button>
+              <div className="flex items-center gap-2 shrink-0">
+                <span className="text-[10px] font-bold uppercase tracking-wider bg-emerald-100 text-emerald-800 px-2.5 py-1 rounded-full border border-emerald-300">
+                  Live Attendance Active
+                </span>
+              </div>
+            </div>
+          ) : (
+            <div className="p-3.5 rounded-2xl bg-amber-50/80 border border-amber-200 text-amber-950 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
+              <div className="flex items-center gap-3">
+                <AlertCircle className="w-5 h-5 text-amber-600 shrink-0" />
+                <div>
+                  <div className="text-xs font-bold text-slate-900">
+                    No class scheduled in this classroom at the current time.
+                  </div>
+                  <div className="text-[11px] text-slate-500 mt-0.5">
+                    Classroom: <strong className="text-slate-700">{selectedClassroom}</strong> &bull; Institutional Time:{" "}
+                    <span className="font-mono">{activeClassInfo.current_time}</span> ({activeClassInfo.day_of_week})
+                    {activeClassInfo.next_class && (
+                      <span>
+                        {" "}&bull; Upcoming next:{" "}
+                        <strong className="text-blue-700">
+                          Period {activeClassInfo.next_class.period_number} ({activeClassInfo.next_class.subject_code}) at {activeClassInfo.next_class.start_time}
+                        </strong>
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <span className="text-[10px] font-bold uppercase tracking-wider bg-amber-100 text-amber-800 px-2.5 py-1 rounded-full border border-amber-300 shrink-0">
+                Room Idle
+              </span>
             </div>
           )}
         </div>
-      </div>
+      )}
+    </div>
+
 
       {/* Hardware Error Alert (if camera is locked) */}
       {cameraLockError && (
@@ -1281,19 +1771,13 @@ export default function CCTVPage() {
           </div>
           <div className="pt-1 flex items-center gap-2">
             <button
-              onClick={startVirtualSimulation}
-              className="px-3 py-1.5 rounded-lg bg-emerald-600 text-white font-semibold text-xs"
-            >
-              Launch Simulated AI Feed
-            </button>
-            <button
               onClick={() => {
                 setCameraLockError(null);
                 toggleLaptopWebcam();
               }}
-              className="px-3 py-1.5 rounded-lg bg-slate-900 text-white font-semibold text-xs"
+              className="px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs transition"
             >
-              Retry Webcam
+              Retry Webcam / RTSP
             </button>
           </div>
         </div>
@@ -1405,6 +1889,108 @@ export default function CCTVPage() {
                 </div>
               </>
             )}
+          </div>
+
+          {/* ============================================================================== */}
+          {/* REGISTERED CLASSROOM CCTV FEEDS & RTSP MANAGER */}
+          {/* ============================================================================== */}
+          <div className="rounded-2xl border border-slate-200/90 bg-white p-5 shadow-xs space-y-3.5">
+            <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+              <div className="flex items-center gap-2">
+                <span className="p-1.5 rounded-lg bg-blue-50 text-blue-600 border border-blue-100">
+                  <Tv className="w-4 h-4" />
+                </span>
+                <div>
+                  <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wider">
+                    Registered Classroom CCTV Feeds
+                  </h3>
+                  <p className="text-[11px] text-slate-500">
+                    Active RTSP IP streams, local hardware, and assigned academic classrooms.
+                  </p>
+                </div>
+              </div>
+
+              <button
+                onClick={() => setShowAddCameraModal(true)}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold shadow-xs transition cursor-pointer"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>Add Stream</span>
+              </button>
+            </div>
+
+            {/* Camera Feeds Grid */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {cameras.map((cam) => {
+                const isSelected = selectedCam?.id === cam.id;
+                return (
+                  <div
+                    key={cam.id}
+                    onClick={() => {
+                      setSelectedCam(cam);
+                      setSelectedClassroom(cam.classroom);
+                      fetchActiveClass(cam.classroom);
+                    }}
+                    className={`p-3.5 rounded-2xl border transition cursor-pointer flex flex-col justify-between gap-3 ${
+                      isSelected
+                        ? "bg-blue-50/70 border-blue-400 ring-2 ring-blue-500/20 shadow-xs"
+                        : "bg-slate-50/60 border-slate-200/80 hover:bg-white hover:border-slate-300"
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="space-y-0.5 min-w-0">
+                        <div className="flex items-center gap-1.5">
+                          <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shrink-0" />
+                          <h4 className="text-xs font-bold text-slate-900 truncate">{cam.name}</h4>
+                        </div>
+                        <div className="flex items-center gap-1.5 text-[11px] text-slate-600">
+                          <MapPin className="w-3 h-3 text-blue-600 shrink-0" />
+                          <span className="font-semibold text-blue-700">{cam.classroom}</span>
+                        </div>
+                      </div>
+
+                      <span className="px-2 py-0.5 rounded-md font-mono text-[9px] font-bold uppercase bg-slate-200 text-slate-700 shrink-0">
+                        {cam.camera_type}
+                      </span>
+                    </div>
+
+                    <div className="text-[10px] font-mono text-slate-400 truncate bg-white/80 px-2 py-1 rounded-lg border border-slate-200/60">
+                      URI: {cam.stream_url}
+                    </div>
+
+                    <div className="flex items-center justify-between pt-1 border-t border-slate-200/40 text-[11px]">
+                      <span className="text-slate-500 font-medium">
+                        {cam.resolution} &bull; {cam.fps} FPS
+                      </span>
+
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleTestCamera(cam.id);
+                          }}
+                          className="text-blue-600 hover:text-blue-800 font-bold transition"
+                        >
+                          {testing ? "Testing..." : "Test Ping"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleDeleteCamera(cam.id);
+                          }}
+                          className="text-slate-400 hover:text-rose-600 transition"
+                          title="Remove stream"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           </div>
 
           {/* ============================================================================== */}
@@ -1552,67 +2138,67 @@ export default function CCTVPage() {
             </div>
           </div>
 
-          {/* Identified Student Card */}
+          {/* Classroom Attendance Scoping Banner */}
+          <div className="p-4 rounded-2xl bg-cyan-50 border border-cyan-200 text-cyan-950 text-xs space-y-1.5 shadow-sm">
+            <div className="flex items-center justify-between">
+              <span className="font-bold flex items-center gap-1.5 text-cyan-900">
+                <ShieldCheck className="w-4 h-4 text-cyan-600" />
+                Classroom Student Filter Active
+              </span>
+              <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-cyan-100 text-cyan-800">
+                ROOM-SCOPED
+              </span>
+            </div>
+            <p className="text-[11px] text-cyan-800 leading-snug">
+              Surveillance is locked to <strong className="text-slate-900">{currentSlot.classroom}</strong> (Section {currentSlot.section}). Face recognition strictly matches against the enrolled students of this classroom. Non-enrolled students are rejected.
+            </p>
+          </div>
+
+          {/* Live Verified Classroom Attendance Ledger */}
           <div className="p-5 rounded-2xl bg-white border border-slate-200 shadow-sm space-y-3">
             <div className="flex items-center justify-between border-b border-slate-100 pb-2.5">
               <span className="text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
                 <UserCheck className="w-3.5 h-3.5 text-emerald-600" />
-                Real-Time Matched Student
+                Live Attendance Feed ({liveAttendanceLog.length} Present)
               </span>
               <span
                 className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold ${
-                  recognizedFaces.length > 0
+                  liveAttendanceLog.length > 0
                     ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
                     : "bg-slate-100 text-slate-500"
                 }`}
               >
-                {recognizedFaces.length > 0 ? "FACE MATCHED" : "AWAITING FACE"}
+                {liveAttendanceLog.length > 0 ? "STREAMING" : "STANDBY"}
               </span>
             </div>
 
-            {recognizedFaces.length > 0 ? (
-              <div className="space-y-3">
-                <div className="flex items-center gap-3">
-                  <div className="w-11 h-11 rounded-xl bg-emerald-100 border border-emerald-300 flex items-center justify-center text-emerald-700 font-bold text-sm">
-                    {recognizedFaces[0].full_name.charAt(0)}
-                  </div>
-                  <div>
-                    <h4 className="font-bold text-slate-900 text-sm">
-                      {recognizedFaces[0].full_name}
-                    </h4>
-                    <p className="text-xs font-mono text-slate-500">
-                      {recognizedFaces[0].roll_number}
-                    </p>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-2 text-xs">
-                  <div className="p-2 rounded-xl bg-slate-50 border border-slate-200">
-                    <span className="text-slate-400 text-[10px] block">Confidence</span>
-                    <span className="font-mono font-bold text-emerald-600">
-                      {(recognizedFaces[0].confidence * 100).toFixed(0)}% Match
+            {liveAttendanceLog.length > 0 ? (
+              <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
+                {liveAttendanceLog.map((st) => (
+                  <div
+                    key={st.student_id}
+                    className="p-2.5 rounded-xl bg-emerald-50/80 border border-emerald-200 flex items-center justify-between text-xs animate-in fade-in duration-150"
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />
+                      <div>
+                        <h5 className="font-bold text-slate-900 text-xs leading-none">{st.name}</h5>
+                        <p className="text-[10px] font-mono text-slate-500 mt-0.5">
+                          {st.roll} • {(st.confidence * 100).toFixed(0)}% Match • {st.time}
+                        </p>
+                      </div>
+                    </div>
+                    <span className="px-2 py-0.5 rounded text-[10px] font-black bg-emerald-600 text-white shadow-xs">
+                      PRESENT
                     </span>
                   </div>
-                  <div className="p-2 rounded-xl bg-slate-50 border border-slate-200">
-                    <span className="text-slate-400 text-[10px] block">Anti-Spoof</span>
-                    <span className="font-mono font-bold text-blue-600">
-                      {(recognizedFaces[0].liveness_score * 100).toFixed(0)}% Real
-                    </span>
-                  </div>
-                </div>
-
-                <button
-                  onClick={handleCapturePeriodAttendance}
-                  className="w-full py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-md shadow-emerald-600/20 transition"
-                >
-                  Commit Attendance for {recognizedFaces[0].full_name.split(" ")[0]}
-                </button>
+                ))}
               </div>
             ) : (
               <div className="text-center py-6 text-slate-400 space-y-2">
                 <CameraIcon className="w-8 h-8 mx-auto opacity-30 text-slate-500" />
                 <p className="text-xs">
-                  No face detected in frame yet. Look at your laptop camera to verify.
+                  Awaiting faces in camera feed. Enrolled students will appear here as they are detected.
                 </p>
               </div>
             )}
@@ -1622,17 +2208,365 @@ export default function CCTVPage() {
           <div className="p-4 rounded-2xl bg-blue-50/70 border border-blue-200 text-blue-950 text-xs space-y-2">
             <span className="font-bold flex items-center gap-1.5 text-blue-900">
               <ShieldCheck className="w-4 h-4 text-blue-600" />
-              How to Test Attendance:
+              How Multi-Face Classroom Attendance Works:
             </span>
             <ol className="list-decimal pl-4 space-y-1 text-slate-600 text-[11px]">
-              <li>Select your period slot (e.g. Period 1).</li>
-              <li>Click <strong>&quot;Laptop Webcam&quot;</strong> and allow camera access.</li>
-              <li>Look at the camera — your face will track with the green reticle.</li>
-              <li>Click <strong>&quot;Record Period Attendance&quot;</strong> to mark Present.</li>
+              <li>The camera detects all faces in the classroom simultaneously.</li>
+              <li>Only students enrolled in <strong className="text-slate-800">{currentSlot.classroom}</strong> are searched.</li>
+              <li>🟢 <strong>Green Sticks:</strong> Enrolled student &rarr; Attendance automatically marked PRESENT.</li>
+              <li>🔴 <strong>Red Sticks:</strong> Outsider/Unregistered &rarr; Attendance rejected.</li>
             </ol>
           </div>
         </div>
       </div>
+      {/* ============================================================================== */}
+      {/* MODAL: ADD CCTV STREAM & ASSIGN CLASSROOM */}
+      {/* ============================================================================== */}
+      {showAddCameraModal && (
+        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl border border-slate-200 shadow-2xl max-w-lg w-full overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+            {/* Modal Header */}
+            <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <span className="p-2 rounded-xl bg-blue-50 text-blue-600 border border-blue-100">
+                  <Video className="w-5 h-5" />
+                </span>
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900">
+                    Add CCTV Stream &amp; Assign Classroom
+                  </h3>
+                  <p className="text-[11px] text-slate-500">
+                    Configure RTSP IP camera, hardware stream, or USB sensor for real-time attendance.
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowAddCameraModal(false)}
+                className="text-slate-400 hover:text-slate-600"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Notification messages inside modal */}
+            {addCamError && (
+              <div className="mx-6 mt-4 p-3 rounded-2xl bg-rose-50 border border-rose-200 text-rose-900 text-xs font-semibold flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                <span>{addCamError}</span>
+              </div>
+            )}
+            {addCamSuccess && (
+              <div className="mx-6 mt-4 p-3 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-900 text-xs font-semibold flex items-center gap-2">
+                <Check className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span>{addCamSuccess}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleSaveCamera} className="p-6 space-y-4 text-xs">
+              {/* Camera Name */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Camera Feed Title
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. Room 302 Front Overhead PTZ"
+                  value={cameraForm.name}
+                  onChange={(e) => setCameraForm({ ...cameraForm, name: e.target.value })}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs text-slate-900 focus:outline-none focus:border-blue-500 focus:bg-white"
+                />
+              </div>
+
+              {/* Classroom Assignment Section */}
+              <div className="space-y-2 p-3.5 bg-slate-50 rounded-2xl border border-slate-200/80">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                    <MapPin className="w-3.5 h-3.5 text-blue-600" />
+                    <span>Assigned Classroom Facility</span>
+                  </label>
+                  <div className="flex items-center gap-2 text-[11px]">
+                    <button
+                      type="button"
+                      onClick={() => setAssignClassroomMode("EXISTING")}
+                      className={`font-semibold cursor-pointer ${
+                        assignClassroomMode === "EXISTING"
+                          ? "text-blue-600 underline font-bold"
+                          : "text-slate-500 hover:text-slate-800"
+                      }`}
+                    >
+                      Select Existing
+                    </button>
+                    <span className="text-slate-300">|</span>
+                    <button
+                      type="button"
+                      onClick={() => setAssignClassroomMode("NEW")}
+                      className={`font-semibold cursor-pointer ${
+                        assignClassroomMode === "NEW"
+                          ? "text-blue-600 underline font-bold"
+                          : "text-slate-500 hover:text-slate-800"
+                      }`}
+                    >
+                      + Create New Classroom
+                    </button>
+                  </div>
+                </div>
+
+                {assignClassroomMode === "EXISTING" ? (
+                  <select
+                    value={cameraForm.classroom}
+                    onChange={(e) => setCameraForm({ ...cameraForm, classroom: e.target.value })}
+                    className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold text-slate-800 focus:outline-none focus:border-blue-500"
+                  >
+                    {classroomsList.map((room) => (
+                      <option key={room} value={room}>
+                        {room}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <div className="space-y-2 pt-1">
+                    <input
+                      type="text"
+                      required
+                      placeholder="e.g. Room 404, Electronics Lab 2, Hall A"
+                      value={newClassroomName}
+                      onChange={(e) => setNewClassroomName(e.target.value)}
+                      className="w-full bg-white border border-blue-300 rounded-xl px-3 py-2 text-xs text-slate-900 font-semibold focus:outline-none focus:border-blue-600 shadow-2xs"
+                    />
+                    <div className="grid grid-cols-2 gap-2 text-[11px]">
+                      <input
+                        type="text"
+                        placeholder="Building (e.g. Tech Block)"
+                        value={newClassroomBuilding}
+                        onChange={(e) => setNewClassroomBuilding(e.target.value)}
+                        className="w-full bg-white border border-slate-200 rounded-lg px-2.5 py-1 text-slate-700"
+                      />
+                      <input
+                        type="number"
+                        placeholder="Capacity (e.g. 60)"
+                        value={newClassroomCapacity}
+                        onChange={(e) => setNewClassroomCapacity(Number(e.target.value))}
+                        className="w-full bg-white border border-slate-200 rounded-lg px-2.5 py-1 text-slate-700"
+                      />
+                    </div>
+                    <p className="text-[10px] text-blue-700">
+                      &bull; This classroom will be automatically created in the academic timetable database.
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              {/* Feed Medium / Camera Protocol Cards */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                  Feed Protocol / Stream Medium
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  {[
+                    { type: "RTSP", label: "RTSP Stream", desc: "Overhead CCTV / IP Camera", icon: Radio },
+                    { type: "WEBCAM", label: "USB Hardware", desc: "Local USB Camera / Index", icon: CameraIcon },
+                    { type: "HTTP_MJPEG", label: "HTTP / MJPEG", desc: "Webcam / IP Web Stream", icon: Wifi },
+                    { type: "VIRTUAL", label: "Simulated Feed", desc: "Virtual Automated Stream", icon: Sparkles },
+                  ].map((item) => {
+                    const isSelected = cameraForm.camera_type === item.type;
+                    const Icon = item.icon;
+                    return (
+                      <div
+                        key={item.type}
+                        onClick={() => setCameraForm({ ...cameraForm, camera_type: item.type })}
+                        className={`p-3 rounded-2xl border transition cursor-pointer space-y-1 ${
+                          isSelected
+                            ? "bg-blue-50/80 border-blue-400 ring-2 ring-blue-500/15"
+                            : "bg-slate-50 border-slate-200 hover:bg-white"
+                        }`}
+                      >
+                        <div className="flex items-center gap-1.5">
+                          <Icon className={`w-3.5 h-3.5 ${isSelected ? "text-blue-600" : "text-slate-500"}`} />
+                          <span className={`font-bold ${isSelected ? "text-blue-900" : "text-slate-800"}`}>
+                            {item.label}
+                          </span>
+                        </div>
+                        <p className="text-[10px] text-slate-500 leading-tight">{item.desc}</p>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Medium-Specific Configuration */}
+              {cameraForm.camera_type === "RTSP" && (
+                <div className="p-3.5 bg-slate-50 rounded-2xl border border-slate-200/80 space-y-3">
+                  <span className="text-xs font-bold text-slate-800 block">
+                    RTSP Connection Parameters &amp; Stream Number
+                  </span>
+
+                  <div className="grid grid-cols-3 gap-2">
+                    <div className="col-span-2">
+                      <label className="text-[10px] font-medium text-slate-500 block mb-0.5">IP Address / Host</label>
+                      <input
+                        type="text"
+                        placeholder="192.168.1.100"
+                        value={cameraForm.rtsp_ip}
+                        onChange={(e) => setCameraForm({ ...cameraForm, rtsp_ip: e.target.value })}
+                        className="w-full bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 font-mono text-xs text-slate-800"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-medium text-slate-500 block mb-0.5">RTSP Port</label>
+                      <input
+                        type="text"
+                        placeholder="554"
+                        value={cameraForm.rtsp_port}
+                        onChange={(e) => setCameraForm({ ...cameraForm, rtsp_port: e.target.value })}
+                        className="w-full bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 font-mono text-xs text-slate-800"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-2">
+                    <div>
+                      <label className="text-[10px] font-medium text-slate-500 block mb-0.5">RTSP Channel / Stream #</label>
+                      <input
+                        type="text"
+                        placeholder="1"
+                        value={cameraForm.rtsp_channel}
+                        onChange={(e) => setCameraForm({ ...cameraForm, rtsp_channel: e.target.value })}
+                        className="w-full bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 font-mono text-xs text-slate-800"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-medium text-slate-500 block mb-0.5">Username (Optional)</label>
+                      <input
+                        type="text"
+                        placeholder="admin"
+                        value={cameraForm.rtsp_user}
+                        onChange={(e) => setCameraForm({ ...cameraForm, rtsp_user: e.target.value })}
+                        className="w-full bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs text-slate-800"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-medium text-slate-500 block mb-0.5">Password</label>
+                      <input
+                        type="password"
+                        placeholder="••••••••"
+                        value={cameraForm.rtsp_pass}
+                        onChange={(e) => setCameraForm({ ...cameraForm, rtsp_pass: e.target.value })}
+                        className="w-full bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs text-slate-800"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="pt-1">
+                    <label className="text-[10px] font-medium text-slate-500 block mb-0.5">
+                      Or Direct RTSP Stream URI
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="rtsp://admin:admin123@192.168.1.100:554/stream1"
+                      value={cameraForm.stream_url}
+                      onChange={(e) => setCameraForm({ ...cameraForm, stream_url: e.target.value })}
+                      className="w-full bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 font-mono text-[11px] text-slate-800"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {cameraForm.camera_type === "WEBCAM" && (
+                <div className="p-3.5 bg-slate-50 rounded-2xl border border-slate-200/80 space-y-2">
+                  <label className="text-xs font-bold text-slate-800 block">
+                    USB Camera Device Index
+                  </label>
+                  <select
+                    value={cameraForm.usb_index}
+                    onChange={(e) => setCameraForm({ ...cameraForm, usb_index: e.target.value })}
+                    className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold text-slate-800"
+                  >
+                    <option value="0">Camera 0 (Default Integrated Webcam)</option>
+                    <option value="1">Camera 1 (External USB CCTV Lens 1)</option>
+                    <option value="2">Camera 2 (External USB CCTV Lens 2)</option>
+                  </select>
+                </div>
+              )}
+
+              {cameraForm.camera_type === "HTTP_MJPEG" && (
+                <div className="p-3.5 bg-slate-50 rounded-2xl border border-slate-200/80 space-y-2">
+                  <label className="text-xs font-bold text-slate-800 block">
+                    HTTP Stream / MJPEG Endpoint
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="http://192.168.1.50:8080/video"
+                    value={cameraForm.stream_url}
+                    onChange={(e) => setCameraForm({ ...cameraForm, stream_url: e.target.value })}
+                    className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 font-mono text-xs text-slate-800"
+                  />
+                </div>
+              )}
+
+              {/* Sensor & Quality Settings */}
+              <div className="grid grid-cols-3 gap-2">
+                <div>
+                  <label className="text-[10px] font-semibold text-slate-600 block mb-1">Direction</label>
+                  <select
+                    value={cameraForm.crossing_direction}
+                    onChange={(e) => setCameraForm({ ...cameraForm, crossing_direction: e.target.value })}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs text-slate-800 font-medium"
+                  >
+                    <option value="LEFT_TO_RIGHT_ENTRY">Left &rarr; Right</option>
+                    <option value="RIGHT_TO_LEFT_ENTRY">Right &rarr; Left</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="text-[10px] font-semibold text-slate-600 block mb-1">Resolution</label>
+                  <select
+                    value={cameraForm.resolution}
+                    onChange={(e) => setCameraForm({ ...cameraForm, resolution: e.target.value })}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs text-slate-800 font-medium"
+                  >
+                    <option value="1920x1080">1080p FHD</option>
+                    <option value="1280x720">720p HD</option>
+                    <option value="640x480">480p SD</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="text-[10px] font-semibold text-slate-600 block mb-1">Target FPS</label>
+                  <select
+                    value={cameraForm.fps}
+                    onChange={(e) => setCameraForm({ ...cameraForm, fps: Number(e.target.value) })}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs text-slate-800 font-medium"
+                  >
+                    <option value={25}>25 FPS</option>
+                    <option value={30}>30 FPS</option>
+                    <option value={15}>15 FPS</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="pt-3 flex items-center justify-end gap-2.5 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setShowAddCameraModal(false)}
+                  className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-100 transition cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={savingCamera}
+                  className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs shadow-xs transition cursor-pointer disabled:opacity-50"
+                >
+                  {savingCamera ? "Connecting & Deploying..." : "Deploy Camera Stream"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

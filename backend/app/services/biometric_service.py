@@ -253,46 +253,132 @@ def calculate_match_confidence(similarity: float, threshold: float = SFACE_MATCH
         return round(float(min(0.48, conf)), 2)
 
 
-def check_anti_spoofing(face_img: np.ndarray) -> Tuple[bool, float, str]:
+def check_anti_spoofing(
+    face_img: np.ndarray,
+    full_image: Optional[np.ndarray] = None,
+    bbox: Optional[Tuple[int, int, int, int]] = None
+) -> Tuple[bool, float, str]:
     """
-    Multi-Factor Anti-Spoofing Engine:
-    1. Laplacian Texture Variance: Detects flat printed paper photos & low-texture cutouts.
-    2. 2D Fast Fourier Transform (FFT): Detects digital screen pixel moiré patterns from phones/monitors.
+    Advanced Multi-Factor Biometric Anti-Spoofing Engine:
+    1. Texture Flatness / Sharpness (Laplacian variance): Detects printed paper photos & photocopies.
+    2. Specular Glare & Glass Reflection: Detects smartphone screen glass & glossy photo reflections.
+    3. Chrominance Dispersion (YCrCb & HSV): Detects color gamut clamping & paper ink desaturation.
+    4. 2D FFT Periodic Moiré: Detects digital screen subpixel grids (LCD/OLED phone replays).
+    5. Perimeter Device Bezel / Border: Detects rectangular smartphone bezels or paper sheet edges.
+    6. Luminance Dynamic Range: Detects elevated LCD black levels & washed-out printouts.
+
     Returns: (is_spoof: bool, liveness_score: float, details: str)
     """
     if face_img is None or face_img.size == 0:
         return True, 0.0, "Empty face region"
 
+    fh, fw = face_img.shape[:2]
+    if fh < 24 or fw < 24:
+        return True, 0.10, "Face resolution too low for biometric liveness verification"
+
     gray = cv2.cvtColor(face_img, cv2.COLOR_BGR2GRAY) if len(face_img.shape) == 3 else face_img
+    hsv = cv2.cvtColor(face_img, cv2.COLOR_BGR2HSV) if len(face_img.shape) == 3 else None
+    ycrcb = cv2.cvtColor(face_img, cv2.COLOR_BGR2YCrCb) if len(face_img.shape) == 3 else None
 
-    # 1. Texture Variance
-    laplacian_var = cv2.Laplacian(gray, cv2.CV_64F).var()
+    spoof_reasons = []
+    liveness_penalties = 0.0
 
-    # 2. FFT Screen Moiré Detection
+    # 1. Texture Sharpness & Flatness (Laplacian Variance)
+    laplacian_var = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+    if laplacian_var < 20.0:
+        spoof_reasons.append(f"Low texture variance detected ({laplacian_var:.1f}) - Possible flat paper/blank cutout")
+        liveness_penalties += 0.55
+    elif laplacian_var > 1450.0:
+        spoof_reasons.append(f"Extreme high-frequency noise ({laplacian_var:.1f}) - Screen subpixel grid / printer halftone")
+        liveness_penalties += 0.40
+
+    # 2. Specular Glare / Glass Reflection Detection (Phone screens & glossy photo paper)
+    if hsv is not None:
+        s_chan = hsv[:, :, 1]
+        v_chan = hsv[:, :, 2]
+        # Pure white, desaturated specular glare hotspots from phone glass / glossy paper
+        glare_mask = (v_chan > 246) & (s_chan < 35)
+        glare_pct = (float(np.sum(glare_mask)) / float(fh * fw)) * 100.0
+        if glare_pct > 1.2:
+            spoof_reasons.append(f"Glass/Screen specular glare detected ({glare_pct:.2f}% hotspot area) - Possible phone display or glossy photo")
+            liveness_penalties += 0.55
+
+    # 3. Chrominance & Skin Pigment Dispersion (YCrCb & HSV color space)
+    if ycrcb is not None and hsv is not None:
+        y_chan = ycrcb[:, :, 0]
+        cr_chan = ycrcb[:, :, 1]
+        cb_chan = ycrcb[:, :, 2]
+
+        cr_std = float(np.std(cr_chan))
+        cb_std = float(np.std(cb_chan))
+        s_std = float(np.std(hsv[:, :, 1]))
+
+        # Real skin has natural chromatic dispersion. Printed paper and screens have clamped or skewed chroma
+        if cr_std < 3.2 and cb_std < 3.0:
+            spoof_reasons.append(f"Unnatural flat color gamut (Cr_std={cr_std:.1f}, Cb_std={cb_std:.1f}) - Monochrome or paper print")
+            liveness_penalties += 0.50
+        elif s_std < 4.0:
+            spoof_reasons.append(f"Desaturated color profile (S_std={s_std:.1f}) - Flat paper printout")
+            liveness_penalties += 0.40
+
+        # Dynamic range check: screens elevate black levels due to backlight, paper compresses contrast
+        y_min = int(np.percentile(y_chan, 2))
+        y_max = int(np.percentile(y_chan, 98))
+        dynamic_range = y_max - y_min
+        if dynamic_range < 50:
+            spoof_reasons.append(f"Low dynamic range ({dynamic_range}) - Paper photocopy or washed-out display")
+            liveness_penalties += 0.35
+
+    # 4. 2D FFT Frequency Analysis (Screen Pixel Moiré & Periodic High-Freq Artifacts)
     f = np.fft.fft2(gray)
     fshift = np.fft.fftshift(f)
-    magnitude_spectrum = 20 * np.log(np.abs(fshift) + 1)
-    
+    mag = np.abs(fshift)
     rows, cols = gray.shape
     crow, ccol = rows // 2, cols // 2
-    r = min(crow, ccol) // 4
-    if r > 0 and crow - r >= 0 and ccol - r >= 0:
-        magnitude_spectrum[crow-r:crow+r, ccol-r:ccol+r] = 0
-    high_freq_power = float(np.mean(magnitude_spectrum))
+    r = max(5, min(crow, ccol) // 4)
+    # Zero out low frequencies / DC component
+    mag_hf = mag.copy()
+    mag_hf[crow-r:crow+r, ccol-r:ccol+r] = 0
+    mean_hf = float(np.mean(mag_hf))
+    max_hf = float(np.max(mag_hf))
+    par = (max_hf / (mean_hf + 1e-5)) if mean_hf > 0 else 0.0
 
-    is_spoof = False
-    details = "Liveness verified"
+    if par > 50.0 and mean_hf > 12.0:
+        spoof_reasons.append(f"Digital screen pixel moiré detected (Peak-to-Average={par:.1f}) - Possible phone/tablet display")
+        liveness_penalties += 0.50
 
-    if laplacian_var < 8.0:
-        is_spoof = True
-        liveness_score = 0.25
-        details = f"Low texture variance detected ({laplacian_var:.1f}) - Possible flat paper/blank cutout"
-    elif high_freq_power > 165.0:
-        is_spoof = True
-        liveness_score = 0.35
-        details = f"Digital screen pixel moiré detected ({high_freq_power:.1f}) - Possible phone/tablet display"
-    else:
-        liveness_score = min(1.0, max(0.65, float(laplacian_var / 120.0)))
+    # 5. Perimeter Border & Phone Bezel Detection (if full image and bbox provided)
+    if full_image is not None and bbox is not None and len(full_image.shape) >= 2:
+        bx, by, bw, bh = bbox
+        img_h, img_w = full_image.shape[:2]
+        # Inspect margin around the face bounding box for phone edges or paper borders
+        margin_x = int(bw * 0.25)
+        margin_y = int(bh * 0.25)
+        x1 = max(0, bx - margin_x)
+        y1 = max(0, by - margin_y)
+        x2 = min(img_w, bx + bw + margin_x)
+        y2 = min(img_h, by + bh + margin_y)
+
+        perimeter = full_image[y1:y2, x1:x2]
+        if perimeter.size > 0:
+            perim_gray = cv2.cvtColor(perimeter, cv2.COLOR_BGR2GRAY) if len(perimeter.shape) == 3 else perimeter
+            edges = cv2.Canny(perim_gray, 50, 150)
+            lines = cv2.HoughLinesP(edges, 1, np.pi/180, threshold=40, minLineLength=int(min(bw, bh)*0.6), maxLineGap=10)
+            if lines is not None and len(lines) >= 3:
+                straight_edges = 0
+                for line in lines:
+                    lx1, ly1, lx2, ly2 = line[0]
+                    angle = np.abs(np.arctan2(ly2 - ly1, lx2 - lx1) * 180.0 / np.pi)
+                    if angle < 12 or angle > 168 or abs(angle - 90) < 12:
+                        straight_edges += 1
+                if straight_edges >= 2:
+                    spoof_reasons.append(f"Rectangular device bezel / paper border detected around face ({straight_edges} sharp edges)")
+                    liveness_penalties += 0.60
+
+    # Calculate final liveness score and verdict
+    liveness_score = max(0.05, min(0.99, 1.0 - liveness_penalties))
+    is_spoof = len(spoof_reasons) > 0 or liveness_score < 0.65
+    details = "; ".join(spoof_reasons) if spoof_reasons else "Liveness verified: natural 3D skin chromaticity"
 
     return is_spoof, round(liveness_score, 2), details
 

@@ -9,6 +9,7 @@ from app.core.database import get_db
 from app.api.deps import get_current_user, require_admin
 from app.models.user import User
 from app.models.cctv import Camera, CameraStatus, CrossingDirection
+from app.models.academic import Classroom
 from app.schemas.cctv import CameraCreate, CameraUpdate, CameraResponse, CameraTestResponse
 from app.services.cctv_service import cctv_manager
 
@@ -47,12 +48,28 @@ def create_camera(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_admin)
 ):
-    """Add a new CCTV / RTSP / USB Webcam stream."""
+    """Add a new CCTV / RTSP / USB Webcam stream and map it to a classroom facility."""
+    # Ensure classroom facility exists in academic records
+    if cam_in.classroom and cam_in.classroom.strip():
+        room_name = cam_in.classroom.strip()
+        existing_room = db.query(Classroom).filter(Classroom.room_number == room_name).first()
+        if not existing_room:
+            new_room = Classroom(
+                room_number=room_name,
+                building="Main Academic Complex",
+                floor=1,
+                capacity=60,
+                room_type="Smart Classroom",
+                is_active=True
+            )
+            db.add(new_room)
+            db.commit()
+
     camera = Camera(
         name=cam_in.name,
         stream_url=cam_in.stream_url,
         camera_type=cam_in.camera_type,
-        classroom=cam_in.classroom,
+        classroom=cam_in.classroom.strip() if cam_in.classroom else "Room 302",
         crossing_direction=cam_in.crossing_direction,
         fps=cam_in.fps,
         resolution=cam_in.resolution,
@@ -89,6 +106,21 @@ def update_camera(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Camera not found")
 
     update_data = cam_in.model_dump(exclude_unset=True)
+    if "classroom" in update_data and update_data["classroom"]:
+        room_name = update_data["classroom"].strip()
+        existing_room = db.query(Classroom).filter(Classroom.room_number == room_name).first()
+        if not existing_room:
+            new_room = Classroom(
+                room_number=room_name,
+                building="Main Academic Complex",
+                floor=1,
+                capacity=60,
+                room_type="Smart Classroom",
+                is_active=True
+            )
+            db.add(new_room)
+            db.commit()
+
     for field, val in update_data.items():
         setattr(camera, field, val)
 
@@ -102,10 +134,14 @@ def delete_camera(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_admin)
 ):
-    """Remove a camera stream."""
+    """Remove a camera stream and unbind timetable references."""
     camera = db.query(Camera).filter(Camera.id == camera_id).first()
     if not camera:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Camera not found")
+    
+    from app.models.timetable import Timetable
+    db.query(Timetable).filter(Timetable.camera_id == camera.id).update({"camera_id": None}, synchronize_session=False)
+
     db.delete(camera)
     db.commit()
     return None
