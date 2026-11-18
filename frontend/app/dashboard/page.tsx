@@ -19,8 +19,6 @@ import {
   TrendingUp,
   Activity,
   FileSpreadsheet,
-  Play,
-  Pause,
   RotateCw,
   Eye,
   PieChart as PieIcon,
@@ -30,8 +28,10 @@ import {
   GraduationCap,
   AlertTriangle,
   Building,
+  Layers,
+  Radio,
 } from "lucide-react";
-import { fetchHealth, SystemHealth, API_BASE_URL, getAuthHeaders } from "@/lib/api";
+import { API_BASE_URL, getAuthHeaders } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 
 // --- BEZIER SPLINE HELPER FOR SMOOTH CURVES ---
@@ -54,85 +54,110 @@ function getCurvedPath(points: { x: number; y: number }[]): string {
   return d;
 }
 
-// --- CLASS-SPECIFIC DATASETS (SCOPED TO CLASS SIZE: 6 STUDENTS) ---
-const CLASS_CHART_DATA = {
+// --- COLLEGE-WIDE CAMPUS DATASETS (AGGREGATED ACROSS ALL DEPARTMENTS) ---
+const CAMPUS_CHART_DATA = {
   Today: {
     labels: ["P1 (9AM)", "P2 (10AM)", "P3 (11AM)", "P4 (1PM)", "P5 (2PM)", "P6 (3PM)"],
     periodNames: [
-      "Period 1 (09:00 AM) • CS601 AI (Prof. Alan Turing)",
-      "Period 2 (10:00 AM) • CS602 Networks (Prof. Donald Knuth)",
-      "Period 3 (11:15 AM) • CS603 Databases (Prof. Ada Lovelace)",
-      "Period 4 (01:00 PM) • CS604 Operating Systems (Prof. Claude Shannon)",
-      "Period 5 (02:00 PM) • CS605 Cloud Computing (Prof. Alan Turing)",
-      "Period 6 (03:00 PM) • CS606 Machine Learning Lab",
+      "Period 1 (09:00 AM) • Campus Morning Opening & Core Lectures",
+      "Period 2 (10:00 AM) • Department Specializations & Labs",
+      "Period 3 (11:15 AM) • Mid-Day Lecture Sessions",
+      "Period 4 (01:00 PM) • Post-Lunch Academic Sessions",
+      "Period 5 (02:00 PM) • Practical & Laboratory Workstations",
+      "Period 6 (03:00 PM) • Technical Seminars & Project Labs",
     ],
-    // SVG Y-coordinates (scaled for 6-student class in 160px height)
-    // 6 students = y: 30, 5 students = y: 55, 4 students = y: 85, 1 student = y: 130
-    present: [55, 30, 55, 30, 55, 30],
-    ingests: [55, 30, 55, 30, 75, 30],
-    late: [130, 142, 130, 142, 130, 142],
+    // SVG Y-coordinates (scaled for 160px height)
+    // 92-96% attendance = y: 30-40, 80-88% = y: 55-65
+    present: [38, 30, 42, 34, 48, 36],
+    ingests: [35, 28, 40, 32, 45, 33],
+    late: [128, 140, 124, 134, 118, 132],
     rawValues: {
-      present: ["5 / 6", "6 / 6", "5 / 6", "6 / 6", "5 / 6", "6 / 6"],
-      ingests: ["5 Ingests", "6 Ingests", "5 Ingests", "6 Ingests", "4 Ingests (1 Card)", "6 Ingests"],
-      late: ["1 Absent (Kavya)", "0 Absent", "1 Absent (Kavya)", "0 Absent", "0 Absent (1 Card)", "0 Absent"],
+      present: ["92.4% Campus Present", "95.1% Campus Present", "90.8% Campus Present", "93.6% Campus Present", "88.5% Campus Present", "92.0% Campus Present"],
+      ingests: ["1,420 CCTV Ingests", "1,580 CCTV Ingests", "1,390 CCTV Ingests", "1,495 CCTV Ingests", "1,310 CCTV Ingests", "1,440 CCTV Ingests"],
+      late: ["38 Absent / Excused", "22 Absent / Excused", "46 Absent / Excused", "32 Absent / Excused", "58 Absent / Excused", "40 Absent / Excused"],
     },
   },
   Weekly: {
     labels: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat"],
     periodNames: [
-      "Monday (6 Periods)",
-      "Tuesday (6 Periods)",
-      "Wednesday (6 Periods)",
-      "Thursday (6 Periods)",
-      "Friday (6 Periods)",
-      "Saturday (4 Periods)",
+      "Monday (All Departments • 48 Lectures)",
+      "Tuesday (All Departments • 52 Lectures)",
+      "Wednesday (All Departments • 50 Lectures)",
+      "Thursday (All Departments • 46 Lectures)",
+      "Friday (All Departments • 48 Lectures)",
+      "Saturday (Labs & Seminars • 24 Sessions)",
     ],
-    present: [55, 30, 55, 30, 55, 80],
-    ingests: [55, 30, 55, 30, 60, 80],
-    late: [130, 142, 130, 142, 130, 115],
+    present: [40, 32, 35, 30, 45, 75],
+    ingests: [38, 30, 33, 28, 42, 70],
+    late: [126, 138, 132, 142, 120, 95],
     rawValues: {
-      present: ["5.2 avg / 6", "6.0 / 6 (100%)", "5.0 / 6 (83%)", "6.0 / 6 (100%)", "5.4 / 6 (90%)", "4.0 / 6 (67%)"],
-      ingests: ["5.2 Ingests", "6.0 Ingests", "5.0 Ingests", "6.0 Ingests", "5.0 Ingests", "4.0 Ingests"],
-      late: ["0.8 Absent avg", "0.0 Absent", "1.0 Absent", "0.0 Absent", "0.6 Absent", "2.0 Absent"],
+      present: ["91.5% Avg Campus", "94.8% Avg Campus", "93.2% Avg Campus", "95.6% Avg Campus", "89.4% Avg Campus", "76.2% Avg Campus"],
+      ingests: ["8,640 Ingests", "9,120 Ingests", "8,950 Ingests", "9,340 Ingests", "8,400 Ingests", "4,820 Ingests"],
+      late: ["42 Avg Absences", "26 Avg Absences", "34 Avg Absences", "22 Avg Absences", "52 Avg Absences", "118 Avg Absences"],
     },
   },
   Monthly: {
     labels: ["Week 1", "Week 2", "Week 3", "Week 4"],
     periodNames: [
-      "Week 1 (Oct 1 - Oct 7)",
-      "Week 2 (Oct 8 - Oct 14)",
-      "Week 3 (Oct 15 - Oct 21)",
-      "Week 4 (Oct 22 - Oct 28)",
+      "Week 1 (Institutional Academic Term Opening)",
+      "Week 2 (Full Timetable Schedule & CCTV Monitoring)",
+      "Week 3 (Mid-Semester Assessments & Practical Ingests)",
+      "Week 4 (Departmental Reviews & Attendance Audits)",
     ],
-    present: [45, 35, 50, 40],
-    ingests: [48, 38, 52, 42],
-    late: [132, 138, 128, 135],
+    present: [42, 34, 38, 30],
+    ingests: [40, 31, 36, 28],
+    late: [124, 136, 130, 142],
     rawValues: {
-      present: ["86% Class Attendance", "92% Class Attendance", "83% Class Attendance", "88% Class Attendance"],
-      ingests: ["120 Total Face Ingests", "138 Total Face Ingests", "116 Total Face Ingests", "126 Total Face Ingests"],
-      late: ["14 Shortage Flags", "6 Shortage Flags", "16 Shortage Flags", "10 Shortage Flags"],
+      present: ["90.8% Campus Attendance", "94.2% Campus Attendance", "92.5% Campus Attendance", "95.8% Campus Attendance"],
+      ingests: ["44,200 Total Face Ingests", "47,800 Total Face Ingests", "46,100 Total Face Ingests", "48,900 Total Face Ingests"],
+      late: ["142 Shortage Alerts", "88 Shortage Alerts", "112 Shortage Alerts", "64 Shortage Alerts"],
     },
   },
 };
 
+interface AdminOverviewData {
+  institution_name: string;
+  total_students: number;
+  total_faculty: number;
+  total_subjects: number;
+  total_cameras: number;
+  active_cameras: number;
+  total_classrooms: number;
+  classrooms: string[];
+  total_departments: number;
+  departments: string[];
+  total_timetable_slots: number;
+  biometric_enrolled_students: number;
+  pending_biometric_students: number;
+  attendance_rate: number;
+  present_today: number;
+}
+
 export default function DashboardPage() {
   const { user, isAuthenticated, token } = useAuth();
   const [timeframe, setTimeframe] = useState<"Today" | "Weekly" | "Monthly">("Today");
+  const [selectedCourse, setSelectedCourse] = useState<string>("All Courses");
 
-  // Class Overview State (Direct from Classroom API)
-  const [classInfo, setClassInfo] = useState({
-    department: "Computer Science",
-    semester: 6,
-    section: "A",
-    classroom: "Room 302",
-    classTeacherName: "Prof. Alan Turing",
-    totalStudents: 6,
-    enrolledFaces: 5,
-    pendingFaces: 1,
-    presentToday: 5,
-    attendanceRate: 83.3,
+
+  // College-Wide Overview State (Direct from Admin Overview API)
+  const [overview, setOverview] = useState<AdminOverviewData>({
+    institution_name: "University Institute of Technology & Engineering",
+    total_students: 840,
+    total_faculty: 48,
+    total_subjects: 36,
+    total_cameras: 12,
+    active_cameras: 12,
+    total_classrooms: 18,
+    classrooms: ["Room 101", "Room 201", "Room 301", "Room 302", "Lab 1", "Lab 2"],
+    total_departments: 5,
+    departments: ["Computer Science", "Information Science", "Electronics & Comm.", "Mechanical Eng.", "Civil Eng."],
+    total_timetable_slots: 64,
+    biometric_enrolled_students: 790,
+    pending_biometric_students: 50,
+    attendance_rate: 91.8,
+    present_today: 771,
   });
-  const [loadingClass, setLoadingClass] = useState(true);
+  const [loadingOverview, setLoadingOverview] = useState(true);
 
   // Animated entrance trigger
   const [mounted, setMounted] = useState(false);
@@ -141,42 +166,47 @@ export default function DashboardPage() {
     return () => clearTimeout(t);
   }, []);
 
-  // Fetch Class-Specific Details from Classroom Endpoint
+  // Fetch College-Wide Details from Admin Overview Endpoint
   useEffect(() => {
-    const loadClassroomData = async () => {
+    const loadAdminOverview = async () => {
       try {
-        setLoadingClass(true);
-        const res = await fetch(`${API_BASE_URL}/academic/classroom/overview`, {
+        setLoadingOverview(true);
+        const url =
+          selectedCourse && selectedCourse !== "All Courses"
+            ? `${API_BASE_URL}/academic/admin/overview?department=${encodeURIComponent(selectedCourse)}`
+            : `${API_BASE_URL}/academic/admin/overview`;
+        const res = await fetch(url, {
           headers: getAuthHeaders(token),
         });
         if (res.ok) {
-          const data = await res.json();
-          const enrolledCount = (data.students || []).filter((s: any) => s.biometric_enrolled).length;
-          const totalCount = data.students?.length || 6;
-          setClassInfo({
-            department: data.monitored_class?.department || "Computer Science",
-            semester: data.monitored_class?.semester || 6,
-            section: data.monitored_class?.section || "A",
-            classroom: data.monitored_class?.classroom || "Room 302",
-            classTeacherName: data.monitored_class?.class_teacher_name || user?.full_name || "Prof. Alan Turing",
-            totalStudents: totalCount,
-            enrolledFaces: enrolledCount,
-            pendingFaces: totalCount - enrolledCount,
-            presentToday: Math.min(totalCount, Math.max(1, totalCount - 1)), // 5 out of 6
-            attendanceRate: Math.round(((totalCount - 1) / totalCount) * 1000) / 10, // 83.3%
-          });
+          const data: AdminOverviewData = await res.json();
+          setOverview((prev) => ({
+            ...prev,
+            ...data,
+            // Ensure sensible minimums for campus presentation
+            total_students: data.total_students > 0 ? data.total_students : prev.total_students,
+            total_faculty: data.total_faculty > 0 ? data.total_faculty : prev.total_faculty,
+            total_cameras: data.total_cameras > 0 ? data.total_cameras : prev.total_cameras,
+            active_cameras: data.active_cameras > 0 ? data.active_cameras : prev.active_cameras,
+            total_classrooms: data.total_classrooms > 0 ? data.total_classrooms : prev.total_classrooms,
+            total_departments: data.total_departments > 0 ? data.total_departments : prev.total_departments,
+            biometric_enrolled_students:
+              data.biometric_enrolled_students > 0 ? data.biometric_enrolled_students : prev.biometric_enrolled_students,
+            attendance_rate: data.attendance_rate > 0 ? data.attendance_rate : prev.attendance_rate,
+            present_today: data.present_today > 0 ? data.present_today : prev.present_today,
+          }));
         }
       } catch {
         // Fallback default is already set
       } finally {
-        setLoadingClass(false);
+        setLoadingOverview(false);
       }
     };
-    loadClassroomData();
-  }, [token, user]);
+    loadAdminOverview();
+  }, [token, user, selectedCourse]);
 
   // =========================================================================
-  // INTERACTIVE LINE GRAPH STATE & MOVEMENTS (SCOPED TO CLASS)
+  // INTERACTIVE LINE GRAPH STATE
   // =========================================================================
   const [activeSeries, setActiveSeries] = useState({
     present: true,
@@ -187,38 +217,26 @@ export default function DashboardPage() {
   const [hoverCoords, setHoverCoords] = useState<{ x: number; y: number } | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
 
-  // Live Movement Simulation: auto-tick wave pulse
-  const [isLiveSimulating, setIsLiveSimulating] = useState(true);
-  const [liveOffset, setLiveOffset] = useState(0);
-
-  useEffect(() => {
-    if (!isLiveSimulating) return;
-    const interval = setInterval(() => {
-      setLiveOffset((prev) => (prev + 1) % 100);
-    }, 2500);
-    return () => clearInterval(interval);
-  }, [isLiveSimulating]);
-
-  const currentDataset = CLASS_CHART_DATA[timeframe];
+  const currentDataset = CAMPUS_CHART_DATA[timeframe];
   const numPoints = currentDataset.labels.length;
   const svgWidth = 600;
   const svgHeight = 160;
 
-  // Build points arrays for current timeframe with subtle live motion
+  // Build points arrays for current timeframe
   const points = useMemo(() => {
     const stepX = svgWidth / (numPoints - 1);
-    const presentPts = currentDataset.present.map((y, i) => {
-      const jitter = isLiveSimulating ? Math.sin((liveOffset + i) * 0.8) * 3 : 0;
-      return { x: i * stepX, y: Math.max(15, Math.min(145, y + jitter)) };
-    });
-    const ingestsPts = currentDataset.ingests.map((y, i) => {
-      const jitter = isLiveSimulating ? Math.cos((liveOffset + i) * 0.8) * 2.5 : 0;
-      return { x: i * stepX, y: Math.max(15, Math.min(145, y + jitter)) };
-    });
-    const latePts = currentDataset.late.map((y, i) => {
-      const jitter = isLiveSimulating ? Math.sin((liveOffset + i * 1.5) * 0.5) * 2 : 0;
-      return { x: i * stepX, y: Math.max(15, Math.min(145, y + jitter)) };
-    });
+    const presentPts = currentDataset.present.map((y, i) => ({
+      x: i * stepX,
+      y: Math.max(15, Math.min(145, y)),
+    }));
+    const ingestsPts = currentDataset.ingests.map((y, i) => ({
+      x: i * stepX,
+      y: Math.max(15, Math.min(145, y)),
+    }));
+    const latePts = currentDataset.late.map((y, i) => ({
+      x: i * stepX,
+      y: Math.max(15, Math.min(145, y)),
+    }));
 
     return {
       stepX,
@@ -226,7 +244,7 @@ export default function DashboardPage() {
       ingests: ingestsPts,
       late: latePts,
     };
-  }, [currentDataset, numPoints, isLiveSimulating, liveOffset]);
+  }, [currentDataset, numPoints]);
 
   const presentPath = useMemo(() => getCurvedPath(points.present), [points.present]);
   const ingestsPath = useMemo(() => getCurvedPath(points.ingests), [points.ingests]);
@@ -265,74 +283,74 @@ export default function DashboardPage() {
   };
 
   // =========================================================================
-  // INTERACTIVE PIE / DONUT CHART STATE & MOVEMENTS (CLASS INGEST CHANNELS)
+  // INTERACTIVE PIE / DONUT CHART STATE (CAMPUS VERIFICATION CHANNELS & LATENCY)
   // =========================================================================
   const [pieMode, setPieMode] = useState<"distribution" | "latency">("distribution");
   const [activePieIndex, setActivePieIndex] = useState<number | null>(null);
 
-  // Class Channels Breakdown (5 Present via Face, 1 via Barcode fallback, 0 Manual)
-  const classChannelSlices = [
+  // Institutional Verification Channels Breakdown
+  const campusChannelSlices = [
     {
       id: "biometric",
-      name: "Automated Face Recognition (CCTV)",
-      value: "83%",
-      numeric: 5,
-      percent: 0.83,
+      name: "Automated CCTV Face Recognition",
+      value: "88%",
+      numeric: 88,
+      percent: 0.88,
       color: "#10b981",
-      description: "5 Students verified via Room 302 Camera",
+      description: "Passive camera detection across lecture halls & labs",
     },
     {
       id: "barcode",
-      name: "Smart ID Barcode Fallback",
-      value: "17%",
-      numeric: 1,
-      percent: 0.17,
+      name: "Campus Gateway & Kiosk Terminals",
+      value: "9%",
+      numeric: 9,
+      percent: 0.09,
       color: "#2563eb",
-      description: "1 Student verified via Barcode card scan",
+      description: "Library and main gate smart card scanners",
     },
     {
       id: "manual",
-      name: "Teacher Manual Ledger Check",
-      value: "0%",
-      numeric: 0,
-      percent: 0.0,
+      name: "Faculty Administrative Override",
+      value: "3%",
+      numeric: 3,
+      percent: 0.03,
       color: "#f59e0b",
-      description: "No manual overrides needed today",
+      description: "Authorized medical duty & official sports exemptions",
     },
   ];
 
-  // Room 302 Edge Device Latency
-  const classLatencySlices = [
+  // Campus Edge Inference Latency Breakdown
+  const campusLatencySlices = [
     {
       id: "embedding",
-      name: "128-d Gradient Embedding",
-      value: "24ms",
-      numeric: 24,
-      percent: 0.53,
+      name: "128-D Vector Extraction (ResNet)",
+      value: "28ms",
+      numeric: 28,
+      percent: 0.52,
       color: "#2563eb",
-      description: "Room 302 Jetson Xavier Edge",
+      description: "Parallel GPU inference on campus edge nodes",
     },
     {
       id: "spoof",
-      name: "Anti-Spoof FFT Verification",
-      value: "12ms",
-      numeric: 12,
-      percent: 0.32,
+      name: "6-Layer Anti-Spoof Verification",
+      value: "14ms",
+      numeric: 14,
+      percent: 0.30,
       color: "#f59e0b",
-      description: "Classroom Liveness Ingest",
+      description: "FFT moiré, glare, chroma & bezel filter",
     },
     {
       id: "cosine",
-      name: "Cosine Similarity Lookup",
-      value: "4ms",
-      numeric: 4,
-      percent: 0.15,
+      name: "KD-Tree Vector Index Lookup",
+      value: "6ms",
+      numeric: 6,
+      percent: 0.18,
       color: "#10b981",
-      description: "Cohort KD-Tree Vector Match",
+      description: "Real-time cosine similarity search across student body",
     },
   ];
 
-  const currentPieSlices = pieMode === "distribution" ? classChannelSlices : classLatencySlices;
+  const currentPieSlices = pieMode === "distribution" ? campusChannelSlices : campusLatencySlices;
   const circumference = 2 * Math.PI * 38; // ~238.76
 
   let accumulatedPercent = 0;
@@ -350,86 +368,85 @@ export default function DashboardPage() {
   return (
     <div className="space-y-7 pb-10 max-w-7xl mx-auto">
       {/* =========================================================================
-          TOP BANNER: FACULTY MONITORED CLASS IDENTITY
+          TOP BANNER: EXECUTIVE COLLEGE-WIDE ADMINISTRATION COMMAND CENTER
       ========================================================================= */}
       <div className="bg-white border border-slate-200/90 rounded-3xl p-6 shadow-xs flex flex-col lg:flex-row lg:items-center justify-between gap-5 relative overflow-hidden">
         <div className="absolute -top-16 -right-16 w-64 h-64 bg-blue-100/50 rounded-full blur-3xl pointer-events-none" />
 
         <div className="relative z-10 space-y-2">
-          {/* CLASSROOM SCOPE TAG */}
+          {/* INSTITUTIONAL SCOPE TAGS */}
           <div className="flex flex-wrap items-center gap-2">
             <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-blue-100 text-blue-900 border border-blue-200 text-xs font-bold uppercase tracking-wider">
               <School className="w-3.5 h-3.5 text-blue-600" />
-              Monitored Cohort: {classInfo.department} &bull; Sem {classInfo.semester} - Sec {classInfo.section}
+              Campus Command Center &bull; Institutional Administration
             </span>
             <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-indigo-50 border border-indigo-200 text-indigo-700 text-xs font-bold">
-              <Building className="w-3 h-3 text-indigo-600" /> {classInfo.classroom}
+              <Building className="w-3 h-3 text-indigo-600" /> {overview.total_departments} Academic Departments
             </span>
-            {isLiveSimulating && (
-              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs font-semibold animate-pulse">
-                <span className="w-2 h-2 rounded-full bg-emerald-500" />
-                Class Ingest Feed Active
-              </span>
-            )}
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs font-semibold animate-pulse">
+              <span className="w-2 h-2 rounded-full bg-emerald-500" />
+              CCTV AI Surveillance Grid Active
+            </span>
+
+            {/* Course-Wise Dashboard Filter */}
+            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-100 hover:bg-slate-200/70 border border-slate-300 text-slate-800 transition">
+              <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500">Filter:</span>
+              <select
+                value={selectedCourse}
+                onChange={(e) => setSelectedCourse(e.target.value)}
+                className="bg-transparent text-xs font-bold text-slate-900 outline-none cursor-pointer"
+              >
+                <option value="All Courses">All Courses & Departments</option>
+                {overview.departments.map((dept) => (
+                  <option key={dept} value={dept}>
+                    {dept}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
 
           <h1 className="text-xl md:text-2xl font-extrabold text-slate-900 tracking-tight">
-            {isAuthenticated && user ? `Welcome back, ${user.full_name}` : "Faculty Class Teacher Dashboard"}
+            {isAuthenticated && user?.full_name ? `Welcome back, ${user.full_name}` : "Welcome back, System Administrator"}
           </h1>
           <p className="text-xs md:text-sm text-slate-500 leading-relaxed max-w-3xl">
-            Live attendance matrix, real-time biometric verifications, and automated CCTV telemetry scoped exclusively to your monitored cohort (<strong className="text-slate-800">Semester {classInfo.semester} - Section {classInfo.section}</strong>).
+            Live institutional telemetry, campus-wide CCTV edge surveillance grid, biometric compliance records, and aggregate attendance tracking across all university departments and lecture halls.
           </p>
         </div>
 
         <div className="flex flex-wrap items-center gap-3 relative z-10">
-          {/* Live Wave Motion Toggle */}
-          <button
-            onClick={() => setIsLiveSimulating(!isLiveSimulating)}
-            className={`inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition shadow-xs cursor-pointer border ${
-              isLiveSimulating
-                ? "bg-emerald-50 border-emerald-200 text-emerald-700 hover:bg-emerald-100"
-                : "bg-slate-100 border-slate-200 text-slate-600 hover:bg-slate-200"
-            }`}
-            title="Toggle live wave animation and continuous movement"
-          >
-            {isLiveSimulating ? (
-              <>
-                <Pause className="w-3.5 h-3.5 text-emerald-600" />
-                <span>Pause Motion</span>
-              </>
-            ) : (
-              <>
-                <Play className="w-3.5 h-3.5 text-slate-600" />
-                <span>Resume Motion</span>
-              </>
-            )}
-          </button>
-
           <Link
             href="/cctv"
             className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold shadow-md shadow-blue-500/20 transition hover:scale-[1.02] cursor-pointer"
           >
             <Video className="w-4 h-4" />
-            <span>Launch {classInfo.classroom} CCTV</span>
+            <span>Campus CCTV Grid</span>
           </Link>
           <Link
-            href="/classroom"
+            href="/timetable"
             className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700 text-xs font-bold transition cursor-pointer"
           >
-            <Users className="w-4 h-4 text-slate-500" />
-            <span>My Classroom Portal</span>
+            <CalendarCheck className="w-4 h-4 text-slate-500" />
+            <span>Institutional Timetable</span>
+          </Link>
+          <Link
+            href="/attendance"
+            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700 text-xs font-bold transition cursor-pointer"
+          >
+            <Activity className="w-4 h-4 text-slate-500" />
+            <span>Attendance & Analytics</span>
           </Link>
         </div>
       </div>
 
       {/* =========================================================================
-          ROW 1: CLASS-SCOPED METRIC CARDS WITH ANIMATED GAUGES
+          ROW 1: COLLEGE-WIDE KPI METRIC CARDS WITH ANIMATED GAUGES
       ========================================================================= */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
-        {/* Card 1: Class Attendance Rate */}
+        {/* Card 1: Campus-Wide Attendance Rate */}
         <div className="group rounded-3xl border border-slate-200/90 bg-white p-6 shadow-xs flex flex-col justify-between hover:shadow-md hover:border-blue-300 transition-all duration-300 relative overflow-hidden">
           <div className="flex items-center justify-between">
-            <span className="font-bold text-slate-800 text-sm">Class Attendance Rate</span>
+            <span className="font-bold text-slate-800 text-sm">Campus Attendance Rate</span>
             <div className="w-6 h-6 rounded-full bg-slate-100 text-slate-400 group-hover:text-blue-600 group-hover:bg-blue-50 flex items-center justify-center transition">
               <TrendingUp className="w-3.5 h-3.5" />
             </div>
@@ -447,39 +464,39 @@ export default function DashboardPage() {
                   stroke="#2563eb"
                   strokeWidth="8"
                   strokeDasharray="251.2"
-                  strokeDashoffset={mounted ? 251.2 * (1 - classInfo.attendanceRate / 100) : 251.2}
+                  strokeDashoffset={mounted ? 251.2 * (1 - overview.attendance_rate / 100) : 251.2}
                   strokeLinecap="round"
                   style={{ transition: "stroke-dashoffset 1.4s cubic-bezier(0.4, 0, 0.2, 1)" }}
                   className="filter drop-shadow-[0_0_4px_rgba(37,99,235,0.4)]"
                 />
               </svg>
               <div className="absolute inset-0 flex flex-col items-center justify-center">
-                <span className="text-xl font-extrabold text-slate-900">{Math.round(classInfo.attendanceRate)}%</span>
-                <span className="text-[9px] uppercase tracking-wider text-slate-400 font-semibold">Sem {classInfo.semester}-A</span>
+                <span className="text-xl font-extrabold text-slate-900">{Math.round(overview.attendance_rate)}%</span>
+                <span className="text-[9px] uppercase tracking-wider text-slate-400 font-semibold">All Departments</span>
               </div>
             </div>
           </div>
 
           <div className="flex items-baseline justify-between pt-2">
             <div>
-              <span className="text-lg font-extrabold text-slate-900 tracking-tight">{classInfo.totalStudents}</span>
-              <span className="text-[11px] text-slate-400 ml-1.5">Enrolled in Cohort</span>
+              <span className="text-lg font-extrabold text-slate-900 tracking-tight">{overview.total_departments}</span>
+              <span className="text-[11px] text-slate-400 ml-1.5">Active Departments</span>
             </div>
             <Link
-              href="/classroom"
+              href="/attendance"
               className="text-xs font-bold text-blue-600 hover:text-blue-700 transition inline-flex items-center gap-1 group-hover:translate-x-0.5"
             >
-              <span>View Cohort</span>
+              <span>View Attendance</span>
               <ChevronRight className="w-3 h-3" />
             </Link>
           </div>
           <div className="absolute bottom-0 left-0 right-0 h-1 bg-gradient-to-r from-blue-500 to-indigo-600 rounded-b-2xl" />
         </div>
 
-        {/* Card 2: Students Present Today in Class */}
+        {/* Card 2: Total Enrolled Students Across Campus */}
         <div className="group rounded-3xl border border-slate-200/90 bg-white p-6 shadow-xs flex flex-col justify-between hover:shadow-md hover:border-emerald-300 transition-all duration-300 relative overflow-hidden">
           <div className="flex items-center justify-between">
-            <span className="font-bold text-slate-800 text-sm">Students Present Today</span>
+            <span className="font-bold text-slate-800 text-sm">Total Enrolled Students</span>
             <div className="w-6 h-6 rounded-full bg-slate-100 text-slate-400 group-hover:text-emerald-600 group-hover:bg-emerald-50 flex items-center justify-center transition">
               <Users className="w-3.5 h-3.5" />
             </div>
@@ -497,7 +514,11 @@ export default function DashboardPage() {
                   stroke="#10b981"
                   strokeWidth="8"
                   strokeDasharray="251.2"
-                  strokeDashoffset={mounted ? 251.2 * (1 - classInfo.presentToday / classInfo.totalStudents) : 251.2}
+                  strokeDashoffset={
+                    mounted
+                      ? 251.2 * (1 - (overview.present_today / (overview.total_students || 1)))
+                      : 251.2
+                  }
                   strokeLinecap="round"
                   style={{ transition: "stroke-dashoffset 1.4s cubic-bezier(0.4, 0, 0.2, 1) 0.1s" }}
                   className="filter drop-shadow-[0_0_4px_rgba(16,185,129,0.4)]"
@@ -505,9 +526,9 @@ export default function DashboardPage() {
               </svg>
               <div className="absolute inset-0 flex flex-col items-center justify-center">
                 <span className="text-xl font-extrabold text-slate-900">
-                  {classInfo.presentToday} / {classInfo.totalStudents}
+                  {overview.present_today}
                 </span>
-                <span className="text-[9px] uppercase tracking-wider text-emerald-600 font-semibold">Active Period</span>
+                <span className="text-[9px] uppercase tracking-wider text-emerald-600 font-semibold">Present Today</span>
               </div>
             </div>
           </div>
@@ -515,24 +536,24 @@ export default function DashboardPage() {
           <div className="flex items-baseline justify-between pt-2">
             <div>
               <span className="text-xs font-bold text-amber-600 bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200">
-                {classInfo.totalStudents - classInfo.presentToday} Absent Today
+                {Math.max(0, overview.total_students - overview.present_today)} Absent / Leave
               </span>
             </div>
             <Link
-              href="/teacher"
+              href="/academic?tab=students"
               className="text-xs font-bold text-emerald-600 hover:text-emerald-700 transition inline-flex items-center gap-1 group-hover:translate-x-0.5"
             >
-              <span>Daily Ledger</span>
+              <span>Student Directory</span>
               <ChevronRight className="w-3 h-3" />
             </Link>
           </div>
           <div className="absolute bottom-0 left-0 right-0 h-1 bg-gradient-to-r from-emerald-500 to-teal-600 rounded-b-2xl" />
         </div>
 
-        {/* Card 3: Biometric Face Verified (Cohort) */}
+        {/* Card 3: Biometric Enrolled Profiles */}
         <div className="group rounded-3xl border border-slate-200/90 bg-white p-6 shadow-xs flex flex-col justify-between hover:shadow-md hover:border-amber-300 transition-all duration-300 relative overflow-hidden">
           <div className="flex items-center justify-between">
-            <span className="font-bold text-slate-800 text-sm">Biometric Face Verified</span>
+            <span className="font-bold text-slate-800 text-sm">Biometric Enrolled Profiles</span>
             <div className="w-6 h-6 rounded-full bg-slate-100 text-slate-400 group-hover:text-amber-600 group-hover:bg-amber-50 flex items-center justify-center transition">
               <Zap className="w-3.5 h-3.5" />
             </div>
@@ -550,7 +571,11 @@ export default function DashboardPage() {
                   stroke="#f59e0b"
                   strokeWidth="8"
                   strokeDasharray="251.2"
-                  strokeDashoffset={mounted ? 251.2 * (1 - classInfo.enrolledFaces / classInfo.totalStudents) : 251.2}
+                  strokeDashoffset={
+                    mounted
+                      ? 251.2 * (1 - (overview.biometric_enrolled_students / (overview.total_students || 1)))
+                      : 251.2
+                  }
                   strokeLinecap="round"
                   style={{ transition: "stroke-dashoffset 1.4s cubic-bezier(0.4, 0, 0.2, 1) 0.2s" }}
                   className="filter drop-shadow-[0_0_4px_rgba(245,158,11,0.4)]"
@@ -558,7 +583,7 @@ export default function DashboardPage() {
               </svg>
               <div className="absolute inset-0 flex flex-col items-center justify-center">
                 <span className="text-xl font-extrabold text-slate-900">
-                  {Math.round((classInfo.enrolledFaces / classInfo.totalStudents) * 100)}%
+                  {Math.round((overview.biometric_enrolled_students / (overview.total_students || 1)) * 100)}%
                 </span>
                 <span className="text-[9px] uppercase tracking-wider text-amber-600 font-semibold">128-D Enrolled</span>
               </div>
@@ -567,11 +592,11 @@ export default function DashboardPage() {
 
           <div className="flex items-baseline justify-between pt-2">
             <div>
-              <span className="text-lg font-extrabold text-slate-900 tracking-tight">{classInfo.enrolledFaces}</span>
-              <span className="text-[11px] text-slate-400 ml-1.5">Trained ({classInfo.pendingFaces} Pending)</span>
+              <span className="text-lg font-extrabold text-slate-900 tracking-tight">{overview.biometric_enrolled_students}</span>
+              <span className="text-[11px] text-slate-400 ml-1.5">Trained ({overview.pending_biometric_students} Pending)</span>
             </div>
             <Link
-              href="/enrollment"
+              href="/academic?tab=enrollment"
               className="text-xs font-bold text-amber-600 hover:text-amber-700 transition inline-flex items-center gap-1 group-hover:translate-x-0.5"
             >
               <span>Train Face</span>
@@ -581,10 +606,10 @@ export default function DashboardPage() {
           <div className="absolute bottom-0 left-0 right-0 h-1 bg-gradient-to-r from-amber-500 to-orange-500 rounded-b-2xl" />
         </div>
 
-        {/* Card 4: Dedicated Classroom CCTV Stream */}
+        {/* Card 4: Campus CCTV & AI Edge Grid */}
         <div className="group rounded-3xl border border-slate-200/90 bg-white p-6 shadow-xs flex flex-col justify-between hover:shadow-md hover:border-blue-300 transition-all duration-300 relative overflow-hidden">
           <div className="flex items-center justify-between">
-            <span className="font-bold text-slate-800 text-sm">Classroom CCTV Stream</span>
+            <span className="font-bold text-slate-800 text-sm">Campus CCTV Grid</span>
             <div className="w-6 h-6 rounded-full bg-slate-100 text-slate-500 flex items-center justify-center text-xs group-hover:bg-blue-50 group-hover:text-blue-600 transition">
               <Video className="w-3.5 h-3.5" />
             </div>
@@ -594,33 +619,35 @@ export default function DashboardPage() {
             <div className="flex items-center justify-between text-xs p-2 rounded-xl bg-slate-50 border border-slate-100">
               <div className="flex items-center gap-2">
                 <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />
-                <span className="text-slate-800 font-bold">{classInfo.classroom} In-Class Feed</span>
+                <span className="text-slate-800 font-bold">
+                  {overview.active_cameras} / {overview.total_cameras || 12} Nodes Active
+                </span>
               </div>
               <span className="font-bold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full text-[10px]">
-                ONLINE
+                MESH ONLINE
               </span>
             </div>
             <div className="text-[11px] text-slate-500 space-y-1 px-1">
               <div className="flex justify-between">
                 <span>Ingest Stream:</span>
-                <span className="font-mono font-semibold text-slate-700">30 FPS &bull; 1080p</span>
+                <span className="font-mono font-semibold text-slate-700">30 FPS &bull; 1080p Multi-Cam</span>
               </div>
               <div className="flex justify-between">
-                <span>Tripwire Mode:</span>
-                <span className="font-semibold text-blue-600">Passive Attendance</span>
+                <span>Coverage:</span>
+                <span className="font-semibold text-blue-600">{overview.total_classrooms} Lecture Halls & Labs</span>
               </div>
             </div>
           </div>
 
           <div className="flex items-baseline justify-between pt-2">
             <div>
-              <span className="text-xs font-semibold text-slate-500">Class Feed Dedicated</span>
+              <span className="text-xs font-semibold text-slate-500">Institutional Edge Mesh</span>
             </div>
             <Link
               href="/cctv"
               className="text-xs font-bold text-blue-600 hover:text-blue-700 transition inline-flex items-center gap-1 group-hover:translate-x-0.5"
             >
-              <span>View Stream</span>
+              <span>Launch Grid</span>
               <ChevronRight className="w-3 h-3" />
             </Link>
           </div>
@@ -629,11 +656,11 @@ export default function DashboardPage() {
       </div>
 
       {/* =========================================================================
-          ROW 2: CLASS ATTENDANCE TRENDS (LINE GRAPH) + INGEST CHANNELS (DONUT)
+          ROW 2: CAMPUS ATTENDANCE TRENDS (LINE GRAPH) + INGEST CHANNELS (DONUT)
       ========================================================================= */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-5 items-stretch">
         {/* =======================================================================
-            LINE GRAPH: SCOPED TO THIS COHORT (MAX 6 STUDENTS)
+            LINE GRAPH: INSTITUTIONAL ATTENDANCE MATRIX (ALL DEPARTMENTS)
         ======================================================================= */}
         <div className="rounded-3xl border border-slate-200/90 bg-white p-6 shadow-xs lg:col-span-2 flex flex-col justify-between relative overflow-hidden">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
@@ -641,11 +668,11 @@ export default function DashboardPage() {
               <div className="flex items-center gap-2">
                 <LineIcon className="w-4 h-4 text-blue-600" />
                 <h2 className="font-bold text-slate-900 text-base">
-                  Classroom Attendance Matrix ({classInfo.department} &bull; Sem {classInfo.semester}-A)
+                  Campus Attendance & Telemetry Matrix (All Departments)
                 </h2>
               </div>
               <p className="text-xs text-slate-500 mt-0.5">
-                Attendance and face detection telemetry across timetable period slots (Cohort size: {classInfo.totalStudents} students).
+                Aggregate student attendance, face recognition ingests, and absence telemetry across timetable period slots.
               </p>
             </div>
 
@@ -683,7 +710,7 @@ export default function DashboardPage() {
               }`}
             >
               <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 shadow-xs" />
-              <span>Present in Class</span>
+              <span>Present Campus-Wide</span>
             </button>
 
             <button
@@ -712,7 +739,7 @@ export default function DashboardPage() {
           </div>
 
           {/* ===================================================================
-              INTERACTIVE ANIMATED SVG LINE GRAPH (SCOPED TO CLASS SIZE)
+              INTERACTIVE ANIMATED SVG LINE GRAPH (CAMPUS-WIDE)
           =================================================================== */}
           <div className="relative w-full h-60 pt-2 select-none">
             <svg
@@ -745,7 +772,7 @@ export default function DashboardPage() {
                 </filter>
               </defs>
 
-              {/* Horizontal Grid lines with Class Headcount Markers */}
+              {/* Horizontal Grid lines */}
               <line x1="0" y1="30" x2={svgWidth} y2="30" stroke="#f1f5f9" strokeWidth="1" strokeDasharray="4 4" />
               <line x1="0" y1="65" x2={svgWidth} y2="65" stroke="#f1f5f9" strokeWidth="1" strokeDasharray="4 4" />
               <line x1="0" y1="105" x2={svgWidth} y2="105" stroke="#f1f5f9" strokeWidth="1" strokeDasharray="4 4" />
@@ -759,7 +786,7 @@ export default function DashboardPage() {
                 <path d={ingestsArea} fill="url(#blueArea)" className="transition-all duration-700 ease-out" />
               )}
 
-              {/* Line 1: Present in Class */}
+              {/* Line 1: Present Campus-Wide */}
               {activeSeries.present && (
                 <path
                   d={presentPath}
@@ -772,7 +799,7 @@ export default function DashboardPage() {
                 />
               )}
 
-              {/* Line 2: Face Ingests */}
+              {/* Line 2: Face CCTV Ingests */}
               {activeSeries.ingests && (
                 <path
                   d={ingestsPath}
@@ -861,7 +888,7 @@ export default function DashboardPage() {
               ))}
             </div>
 
-            {/* FLOATING HOVER TOOLTIP FOR CLASS PERIOD */}
+            {/* FLOATING HOVER TOOLTIP FOR TIMETABLE PERIOD */}
             {hoverIndex !== null && hoverCoords && (
               <div
                 className="absolute z-30 pointer-events-none bg-white/95 backdrop-blur-md rounded-2xl border border-slate-200/90 shadow-xl p-3 text-xs space-y-1.5 transition-all duration-100 min-w-56"
@@ -878,7 +905,7 @@ export default function DashboardPage() {
                     <div className="flex items-center justify-between text-emerald-700">
                       <span className="flex items-center gap-1.5 font-medium">
                         <span className="w-2 h-2 rounded-full bg-emerald-500" />
-                        Present Students:
+                        Campus Attendance:
                       </span>
                       <strong className="font-mono">{currentDataset.rawValues.present[hoverIndex]}</strong>
                     </div>
@@ -898,7 +925,7 @@ export default function DashboardPage() {
                     <div className="flex items-center justify-between text-amber-700">
                       <span className="flex items-center gap-1.5 font-medium">
                         <span className="w-2 h-2 rounded-full bg-amber-500" />
-                        Status:
+                        Absences:
                       </span>
                       <strong className="font-mono">{currentDataset.rawValues.late[hoverIndex]}</strong>
                     </div>
@@ -910,7 +937,7 @@ export default function DashboardPage() {
         </div>
 
         {/* =======================================================================
-            PIE / DONUT: CLASS ATTENDANCE CHANNELS & LATENCY
+            PIE / DONUT: INSTITUTIONAL ATTENDANCE CHANNELS & LATENCY
         ======================================================================= */}
         <div className="rounded-3xl border border-slate-200/90 bg-white p-6 shadow-xs flex flex-col justify-between relative overflow-hidden">
           <div className="flex items-center justify-between pb-2 border-b border-slate-100">
@@ -918,11 +945,11 @@ export default function DashboardPage() {
               <div className="flex items-center gap-2">
                 <PieIcon className="w-4 h-4 text-blue-600" />
                 <h2 className="font-bold text-slate-900 text-base">
-                  {pieMode === "distribution" ? "Class Verification Modes" : "Room 302 Latency"}
+                  {pieMode === "distribution" ? "Campus Verification Modes" : "Edge Inference Latency"}
                 </h2>
               </div>
               <p className="text-[11px] text-slate-500 mt-0.5">
-                {pieMode === "distribution" ? "Attendance channels in Room 302" : "Processing delay in edge ingest"}
+                {pieMode === "distribution" ? "Breakdown of authentication channels" : "Processing pipeline telemetry"}
               </p>
             </div>
 
@@ -1000,10 +1027,10 @@ export default function DashboardPage() {
                 ) : (
                   <div>
                     <span className="text-2xl font-black text-slate-900 leading-none">
-                      {pieMode === "distribution" ? "83.3%" : "68ms"}
+                      {pieMode === "distribution" ? "88%" : "48ms"}
                     </span>
                     <div className="text-[10px] text-slate-400 mt-1 uppercase font-bold tracking-wider">
-                      {pieMode === "distribution" ? "Face Verified" : "Per Frame"}
+                      {pieMode === "distribution" ? "Face Verified" : "Total Pipeline"}
                     </div>
                   </div>
                 )}
@@ -1039,7 +1066,7 @@ export default function DashboardPage() {
       </div>
 
       {/* =========================================================================
-          ROW 3: IN-CLASSROOM LIVE TIMELINE EVENTS (SECTION 6-A SPECIFIC)
+          ROW 3: INSTITUTIONAL REAL-TIME AUDIT & OPERATION MILESTONES
       ========================================================================= */}
       <div className="rounded-3xl border border-slate-200/90 bg-white p-6 shadow-xs space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-slate-100">
@@ -1047,18 +1074,18 @@ export default function DashboardPage() {
             <div className="flex items-center gap-2">
               <Activity className="w-4 h-4 text-blue-600" />
               <h2 className="font-bold text-slate-900 text-base">
-                In-Classroom Live Attendance Events ({classInfo.classroom} &bull; Section A)
+                Campus Operational & Biometric Audit Log
               </h2>
             </div>
             <p className="text-xs text-slate-500">
-              Live biometric admissions, period transitions, and attendance ledger locks for your monitored cohort.
+              Live campus CCTV mesh events, batch face recognitions, and automated timetable synchronization across all departments.
             </p>
           </div>
           <Link
-            href="/teacher"
+            href="/attendance"
             className="text-xs font-bold text-blue-600 hover:text-blue-700 transition inline-flex items-center gap-1"
           >
-            <span>View Class Teacher Matrix</span>
+            <span>View All Live Sessions</span>
             <ChevronRight className="w-3.5 h-3.5" />
           </Link>
         </div>
@@ -1071,9 +1098,9 @@ export default function DashboardPage() {
               <Video className="w-5 h-5" />
             </div>
             <div>
-              <div className="text-xs font-bold text-slate-900">Room 302 CCTV Synced</div>
-              <div className="text-[11px] text-slate-500 mt-0.5">Sem {classInfo.semester}-A Stream Connected</div>
-              <span className="text-[10px] text-blue-600 font-mono font-semibold">09:00:15 AM</span>
+              <div className="text-xs font-bold text-slate-900">Campus CCTV Edge Mesh Online</div>
+              <div className="text-[11px] text-slate-500 mt-0.5">{overview.active_cameras} Camera Nodes Streaming at 30 FPS</div>
+              <span className="text-[10px] text-blue-600 font-mono font-semibold">08:45:00 AM</span>
             </div>
           </div>
 
@@ -1086,9 +1113,9 @@ export default function DashboardPage() {
               <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-ping absolute -top-1 -right-1" />
             </div>
             <div>
-              <div className="text-xs font-bold text-slate-900">Kushal Student Verified</div>
-              <div className="text-[11px] text-slate-500 mt-0.5">CS-2024-001 &bull; 98.4% Confidence</div>
-              <span className="text-[10px] text-emerald-600 font-mono font-semibold">09:02:44 AM</span>
+              <div className="text-xs font-bold text-slate-900">High-Confidence Biometric Match</div>
+              <div className="text-[11px] text-slate-500 mt-0.5">750+ student face ingests recorded</div>
+              <span className="text-[10px] text-emerald-600 font-mono font-semibold">09:15:30 AM</span>
             </div>
           </div>
 
@@ -1100,8 +1127,8 @@ export default function DashboardPage() {
               <CalendarCheck className="w-5 h-5" />
             </div>
             <div>
-              <div className="text-xs font-bold text-slate-900">Period 1 Finalized (CS601)</div>
-              <div className="text-[11px] text-slate-500 mt-0.5">{classInfo.presentToday}/{classInfo.totalStudents} Present (83.3%)</div>
+              <div className="text-xs font-bold text-slate-900">Period 1 Campus Roster Sealed</div>
+              <div className="text-[11px] text-slate-500 mt-0.5">{overview.attendance_rate}% Campus Attendance Logged</div>
               <span className="text-[10px] text-amber-600 font-mono font-semibold">09:55:00 AM</span>
             </div>
           </div>
@@ -1114,16 +1141,16 @@ export default function DashboardPage() {
               <Send className="w-5 h-5 text-slate-600 group-hover:text-white" />
             </div>
             <div>
-              <div className="text-xs font-bold text-slate-900">Period 2 Handover</div>
-              <div className="text-[11px] text-slate-500 mt-0.5">CS602 &bull; Prof. Donald Knuth</div>
-              <span className="text-[10px] text-slate-600 font-mono font-semibold">10:00:00 AM</span>
+              <div className="text-xs font-bold text-slate-900">Automated Shortage Ingest</div>
+              <div className="text-[11px] text-slate-500 mt-0.5">Dean & HOD Compliance Digest Dispatched</div>
+              <span className="text-[10px] text-slate-600 font-mono font-semibold">10:05:00 AM</span>
             </div>
           </div>
         </div>
       </div>
 
       {/* =========================================================================
-          ROW 4: CLASS TEACHER DIRECT ACTIONS
+          ROW 4: SUPER ADMIN INSTITUTIONAL DIRECT ACTIONS
       ========================================================================= */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
         <Link
@@ -1136,41 +1163,41 @@ export default function DashboardPage() {
             </div>
             <ArrowRight className="w-4 h-4 text-slate-300 group-hover:text-blue-600 group-hover:translate-x-1 transition-all" />
           </div>
-          <h3 className="font-bold text-slate-900 text-sm">Classroom CCTV Stream ({classInfo.classroom})</h3>
+          <h3 className="font-bold text-slate-900 text-sm">Campus CCTV Surveillance Grid</h3>
           <p className="text-xs text-slate-500 mt-1 leading-relaxed">
-            Monitor real-time face detection bounding boxes and passive attendance for Section A students.
+            Monitor real-time AI face recognition video feeds, tripwire corridors, and active cameras across all university blocks.
           </p>
         </Link>
 
         <Link
-          href="/teacher"
+          href="/timetable"
           className="group rounded-3xl border border-slate-200/90 bg-white p-5 shadow-xs hover:border-emerald-300 hover:shadow-md transition-all duration-300"
         >
           <div className="flex items-center justify-between mb-3">
             <div className="w-10 h-10 rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center group-hover:scale-110 group-hover:bg-emerald-600 group-hover:text-white transition-all">
-              <FileSpreadsheet className="w-5 h-5" />
+              <CalendarCheck className="w-5 h-5" />
             </div>
             <ArrowRight className="w-4 h-4 text-slate-300 group-hover:text-emerald-600 group-hover:translate-x-1 transition-all" />
           </div>
-          <h3 className="font-bold text-slate-900 text-sm">Class Teacher Daily Matrix (P1 &ndash; P6)</h3>
+          <h3 className="font-bold text-slate-900 text-sm">Institutional Timetable & Rooms</h3>
           <p className="text-xs text-slate-500 mt-1 leading-relaxed">
-            Review period-by-period daily ledger and subject attendance percentages with shortage alerts (&lt;75%).
+            Manage institutional class schedules, classroom allocations, period time slots, and assigned faculty instructors.
           </p>
         </Link>
 
         <Link
-          href="/classroom"
+          href="/attendance"
           className="group rounded-3xl border border-slate-200/90 bg-white p-5 shadow-xs hover:border-indigo-300 hover:shadow-md transition-all duration-300"
         >
           <div className="flex items-center justify-between mb-3">
             <div className="w-10 h-10 rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center group-hover:scale-110 group-hover:bg-indigo-600 group-hover:text-white transition-all">
-              <School className="w-5 h-5" />
+              <Activity className="w-5 h-5" />
             </div>
             <ArrowRight className="w-4 h-4 text-slate-300 group-hover:text-indigo-600 group-hover:translate-x-1 transition-all" />
           </div>
-          <h3 className="font-bold text-slate-900 text-sm">My Classroom Management Portal</h3>
+          <h3 className="font-bold text-slate-900 text-sm">Master Attendance Sessions</h3>
           <p className="text-xs text-slate-500 mt-1 leading-relaxed">
-            View cohort roster, assigned subject teachers, weekly class timetable, and admit new students.
+            Inspect live multi-classroom attendance sessions, unlock ledger records, verify biometric logs, and generate institutional reports.
           </p>
         </Link>
       </div>

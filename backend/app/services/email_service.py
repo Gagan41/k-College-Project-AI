@@ -62,12 +62,23 @@ def _dispatch_raw_smtp(to_email: str, subject: str, html_content: str, text_cont
     msg.attach(MIMEText(html_content, "html"))
 
     try:
-        server = smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=12)
-        server.starttls()
-        server.login(settings.SMTP_USERNAME, settings.SMTP_PASSWORD)
-        server.sendmail(settings.SMTP_FROM_EMAIL, [to_email], msg.as_string())
-        server.quit()
-        logger.info(f"Successfully delivered email to {to_email} via SMTP. Subject: {subject}")
+        try:
+            server = smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=15)
+            server.ehlo()
+            server.starttls()
+            server.ehlo()
+            server.login(settings.SMTP_USERNAME, settings.SMTP_PASSWORD)
+            server.sendmail(settings.SMTP_FROM_EMAIL, [to_email], msg.as_string())
+            server.quit()
+            logger.info(f"Successfully delivered email to {to_email} via SMTP (STARTTLS). Subject: {subject}")
+            return
+        except Exception as starttls_err:
+            logger.warning(f"STARTTLS dispatch failed ({starttls_err}), falling back to SSL port 465...")
+            server_ssl = smtplib.SMTP_SSL(settings.SMTP_HOST, 465, timeout=15)
+            server_ssl.login(settings.SMTP_USERNAME, settings.SMTP_PASSWORD)
+            server_ssl.sendmail(settings.SMTP_FROM_EMAIL, [to_email], msg.as_string())
+            server_ssl.quit()
+            logger.info(f"Successfully delivered email to {to_email} via SMTP (SSL 465). Subject: {subject}")
     except Exception as exc:
         logger.error(f"SMTP delivery failed to {to_email}: {exc}")
 

@@ -49,6 +49,15 @@ export default function EnrollmentPage() {
   const [enrolling, setEnrolling] = useState(false);
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
+  // Multi-Angle Biometric State
+  type FaceAngle = "FRONT" | "LEFT" | "RIGHT";
+  const [activeAngle, setActiveAngle] = useState<FaceAngle>("FRONT");
+  const [capturedAngles, setCapturedAngles] = useState<{
+    FRONT?: string;
+    LEFT?: string;
+    RIGHT?: string;
+  }>({});
+
   // Webcam State
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -161,7 +170,11 @@ export default function EnrollmentPage() {
 
   useEffect(() => {
     return () => {
-      stopWebcam();
+      if (videoRef.current && videoRef.current.srcObject) {
+        const stream = videoRef.current.srcObject as MediaStream;
+        stream.getTracks().forEach((track) => track.stop());
+        videoRef.current.srcObject = null;
+      }
     };
   }, []);
 
@@ -177,7 +190,14 @@ export default function EnrollmentPage() {
       const dataUrl = canvas.toDataURL("image/jpeg", 0.9);
       setCapturedImage(dataUrl);
       setQualityScore(0.96);
-      stopWebcam();
+      setCapturedAngles((prev) => ({ ...prev, [activeAngle]: dataUrl }));
+
+      // Streamlined multi-angle progression
+      if (activeAngle === "FRONT" && !capturedAngles.LEFT) {
+        setActiveAngle("LEFT");
+      } else if (activeAngle === "LEFT" && !capturedAngles.RIGHT) {
+        setActiveAngle("RIGHT");
+      }
     }
   };
 
@@ -186,15 +206,23 @@ export default function EnrollmentPage() {
     if (file) {
       const reader = new FileReader();
       reader.onloadend = () => {
-        setCapturedImage(reader.result as string);
+        const dataUrl = reader.result as string;
+        setCapturedImage(dataUrl);
         setQualityScore(0.92);
+        setCapturedAngles((prev) => ({ ...prev, [activeAngle]: dataUrl }));
       };
       reader.readAsDataURL(file);
     }
   };
 
   const handleEnrollBiometrics = async () => {
-    if (!selectedStudent || !capturedImage) return;
+    if (!selectedStudent) return;
+    const allImages = Object.values(capturedAngles).filter(Boolean) as string[];
+    if (allImages.length === 0 && capturedImage) {
+      allImages.push(capturedImage);
+    }
+    if (allImages.length === 0) return;
+
     setEnrolling(true);
     setMessage(null);
 
@@ -207,7 +235,8 @@ export default function EnrollmentPage() {
         },
         body: JSON.stringify({
           student_id: selectedStudent.id,
-          image_base64: capturedImage,
+          images_base64: allImages,
+          image_base64: allImages[0],
         }),
       });
 
@@ -218,7 +247,7 @@ export default function EnrollmentPage() {
 
       setMessage({
         type: "success",
-        text: `Successfully trained biometrics for ${data.student_name}! 128-D facial vector stored.`,
+        text: `Successfully trained ${data.total_faces_enrolled} angle(s) for ${data.student_name}! 128-D facial vector embeddings committed.`,
       });
 
       // Update student local state
@@ -419,6 +448,8 @@ export default function EnrollmentPage() {
                     onClick={() => {
                       setSelectedStudent(st);
                       setCapturedImage(null);
+                      setCapturedAngles({});
+                      setActiveAngle("FRONT");
                       setMessage(null);
                     }}
                     className={`p-3.5 rounded-2xl border transition-all cursor-pointer ${
@@ -477,10 +508,10 @@ export default function EnrollmentPage() {
             <div>
               <h2 className="text-sm font-bold text-slate-900 flex items-center gap-2">
                 <Camera className="w-4 h-4 text-blue-600" />
-                <span>Facial Capture Studio</span>
+                <span>Facial Capture Studio &bull; Multi-Angle Biometrics</span>
               </h2>
               <p className="text-[11px] text-slate-500 mt-0.5">
-                Frontal portrait view with good lighting and open eyes.
+                Capture Front (0°), Left profile (~30°), and Right profile (~30°) for robust CCTV recognition.
               </p>
             </div>
             {selectedStudent && (
@@ -488,6 +519,44 @@ export default function EnrollmentPage() {
                 Enrolling: <strong className="text-slate-900">{selectedStudent.user.full_name.split(" ")[0]}</strong>
               </span>
             )}
+          </div>
+
+          {/* Angle Mode Selector Tabs */}
+          <div className="flex items-center gap-2 p-1.5 bg-slate-100/90 rounded-2xl border border-slate-200">
+            {(["FRONT", "LEFT", "RIGHT"] as const).map((angle) => {
+              const isCurrent = activeAngle === angle;
+              const hasCaptured = Boolean(capturedAngles[angle]);
+              const label =
+                angle === "FRONT"
+                  ? "1. Front View (0°)"
+                  : angle === "LEFT"
+                  ? "2. Left Profile (~30°)"
+                  : "3. Right Profile (~30°)";
+              return (
+                <button
+                  key={angle}
+                  type="button"
+                  onClick={() => {
+                    setActiveAngle(angle);
+                    if (capturedAngles[angle]) {
+                      setCapturedImage(capturedAngles[angle]!);
+                    }
+                  }}
+                  className={`flex-1 py-1.5 px-2 rounded-xl font-bold text-xs transition flex items-center justify-center gap-1.5 cursor-pointer ${
+                    isCurrent
+                      ? "bg-white text-blue-700 shadow-xs border border-blue-200"
+                      : "text-slate-600 hover:text-slate-900"
+                  }`}
+                >
+                  {hasCaptured ? (
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                  ) : (
+                    <span className={`w-2 h-2 rounded-full ${isCurrent ? "bg-blue-600 animate-pulse" : "bg-slate-300"}`} />
+                  )}
+                  <span className="truncate">{label}</span>
+                </button>
+              );
+            })}
           </div>
 
           {/* STUDIO VIEWFINDER (NO BLACK BOX) */}
@@ -592,38 +661,122 @@ export default function EnrollmentPage() {
             </label>
           </div>
 
-          {/* Retake Button if image is captured */}
+          {/* 3 Multi-Angle Review & Retake Tray */}
+          <div className="space-y-1.5 pt-1">
+            <div className="flex items-center justify-between text-[11px] font-semibold text-slate-600 px-0.5">
+              <span>Multi-Angle Captured Tray</span>
+              <span className="text-slate-400 font-mono text-[10px]">
+                {Object.values(capturedAngles).filter(Boolean).length} / 3 Angles Captured
+              </span>
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+              {(["FRONT", "LEFT", "RIGHT"] as const).map((angle) => {
+                const img = capturedAngles[angle];
+                const isCurrent = activeAngle === angle;
+                const title = angle === "FRONT" ? "Front 0°" : angle === "LEFT" ? "Left 30°" : "Right 30°";
+                return (
+                  <div
+                    key={angle}
+                    onClick={() => {
+                      setActiveAngle(angle);
+                      if (img) {
+                        setCapturedImage(img);
+                      }
+                    }}
+                    className={`p-2 rounded-xl border transition cursor-pointer flex flex-col items-center gap-1.5 ${
+                      isCurrent
+                        ? "border-blue-400 bg-blue-50/50 shadow-2xs ring-1 ring-blue-400/30"
+                        : "border-slate-200 bg-slate-50/70 hover:border-slate-300"
+                    }`}
+                  >
+                    <div className="w-full aspect-square rounded-lg bg-white border border-slate-200 overflow-hidden flex items-center justify-center relative shadow-inner">
+                      {img ? (
+                        <>
+                          <img src={img} alt={title} className="w-full h-full object-cover" />
+                          <div className="absolute top-1 right-1 w-4 h-4 rounded-full bg-emerald-500 text-white flex items-center justify-center shadow-xs">
+                            <Check className="w-2.5 h-2.5" />
+                          </div>
+                        </>
+                      ) : (
+                        <div className="text-center p-1">
+                          <Camera className="w-4 h-4 text-slate-300 mx-auto" />
+                          <span className="text-[9px] text-slate-400 font-medium">Pending</span>
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex items-center justify-between w-full text-[10px]">
+                      <span className="font-semibold text-slate-700">{title}</span>
+                      {img && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setCapturedAngles((prev) => {
+                              const updated = { ...prev };
+                              delete updated[angle];
+                              return updated;
+                            });
+                            setActiveAngle(angle);
+                            setCapturedImage(null);
+                            startWebcam();
+                          }}
+                          className="text-slate-400 hover:text-rose-600 transition"
+                          title="Retake this angle"
+                        >
+                          <RotateCw className="w-2.5 h-2.5" />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Retake Active Photo Button */}
           {capturedImage && (
             <button
               onClick={() => {
+                setCapturedAngles((prev) => {
+                  const updated = { ...prev };
+                  delete updated[activeAngle];
+                  return updated;
+                });
                 setCapturedImage(null);
                 startWebcam();
               }}
               className="w-full py-2 rounded-xl border border-slate-200 hover:bg-slate-50 text-xs font-semibold text-slate-600 flex items-center justify-center gap-2 transition cursor-pointer"
             >
               <RotateCw className="w-3.5 h-3.5" />
-              <span>Retake Photo</span>
+              <span>Retake {activeAngle === "FRONT" ? "Front" : activeAngle === "LEFT" ? "Left" : "Right"} Angle</span>
             </button>
           )}
 
           {/* Submit / Train Button */}
-          <button
-            onClick={handleEnrollBiometrics}
-            disabled={!capturedImage || !selectedStudent || enrolling}
-            className="w-full py-3 rounded-2xl bg-gradient-to-r from-blue-600 via-indigo-600 to-cyan-600 hover:from-blue-500 hover:to-cyan-500 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-md shadow-blue-500/20 transition cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed hover:scale-[1.01]"
-          >
-            {enrolling ? (
-              <>
-                <RefreshCw className="w-4 h-4 animate-spin" />
-                <span>Extracting 128-D Embedding Vector...</span>
-              </>
-            ) : (
-              <>
-                <Sparkles className="w-4 h-4" />
-                <span>Train Biometric Recognition Model</span>
-              </>
-            )}
-          </button>
+          {(() => {
+            const count = Object.values(capturedAngles).filter(Boolean).length || (capturedImage ? 1 : 0);
+            return (
+              <button
+                onClick={handleEnrollBiometrics}
+                disabled={count === 0 || !selectedStudent || enrolling}
+                className="w-full py-3 rounded-2xl bg-gradient-to-r from-blue-600 via-indigo-600 to-cyan-600 hover:from-blue-500 hover:to-cyan-500 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-md shadow-blue-500/20 transition cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed hover:scale-[1.01]"
+              >
+                {enrolling ? (
+                  <>
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                    <span>Extracting 128-D Embedding Vectors ({count} angle{count > 1 ? "s" : ""})...</span>
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="w-4 h-4" />
+                    <span>
+                      Train Biometric Recognition Model ({count} Angle{count !== 1 ? "s" : ""} Ready)
+                    </span>
+                  </>
+                )}
+              </button>
+            );
+          })()}
         </div>
 
         {/* =========================================================================

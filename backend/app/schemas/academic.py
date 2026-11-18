@@ -65,6 +65,15 @@ class FacultyUpdate(BaseModel):
     full_name: Optional[str] = None
     phone_number: Optional[str] = None
 
+class SubjectMini(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    code: str
+    name: str
+    department: str
+    semester: int = 1
+    credits: int = 3
+
 class FacultyResponse(FacultyBase):
     model_config = ConfigDict(from_attributes=True)
 
@@ -73,6 +82,10 @@ class FacultyResponse(FacultyBase):
     created_at: datetime
     updated_at: datetime
     user: Optional[UserResponse] = None
+    subjects: Optional[List[SubjectMini]] = None
+
+class FacultyAssignSubjectRequest(BaseModel):
+    subject_id: int
 
 # ----------------- SUBJECT SCHEMAS -----------------
 class SubjectBase(BaseModel):
@@ -200,4 +213,133 @@ class ClassroomAddStudentRequest(BaseModel):
     section: Optional[str] = None
     batch_year: Optional[str] = "2023-2027"
     auto_enroll_subjects: bool = True
+
+# ----------------- COURSE & DEPARTMENT SCHEMAS -----------------
+class CourseBase(BaseModel):
+    code: str
+    name: str
+    description: Optional[str] = None
+    is_active: bool = True
+
+class CourseCreate(CourseBase):
+    pass
+
+class CourseUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    is_active: Optional[bool] = None
+
+class CourseResponse(CourseBase):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    created_at: datetime
+    updated_at: datetime
+    student_count: Optional[int] = 0
+    faculty_count: Optional[int] = 0
+    subject_count: Optional[int] = 0
+
+# ----------------- CLASSROOM LOCATION SCHEMAS -----------------
+class ClassroomBase(BaseModel):
+    name: str
+    building: str = "Main Academic Block"
+    capacity: int = 60
+    is_active: bool = True
+
+class ClassroomCreate(ClassroomBase):
+    pass
+
+class ClassroomUpdate(BaseModel):
+    building: Optional[str] = None
+    capacity: Optional[int] = None
+    is_active: Optional[bool] = None
+
+class ClassroomResponse(ClassroomBase):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    created_at: datetime
+    updated_at: datetime
+    camera_id: Optional[int] = None
+    camera_name: Optional[str] = None
+
+# ----------------- CLASS TEACHER ASSIGNMENT SCHEMAS -----------------
+class ClassTeacherAssignRequest(BaseModel):
+    department: str
+    semester: int
+    section: str
+
+# ----------------- ATTENDANCE ANALYTICS SCHEMAS -----------------
+class StudentAnalyticsItem(BaseModel):
+    student_id: int
+    roll_number: str
+    student_name: str
+    department: str
+    semester: int
+    section: str
+    sessions_held: int
+    sessions_attended: int
+    attendance_percentage: float
+    shortage_amount: float
+    is_shortage: bool
+
+class SubjectAnalyticsItem(BaseModel):
+    subject_id: int
+    code: str
+    name: str
+    department: str
+    semester: int
+    faculty_name: Optional[str] = None
+    total_sessions: int
+    average_attendance_percentage: float
+
+class SectionAnalyticsItem(BaseModel):
+    section: str
+    semester: int
+    department: str
+    total_students: int
+    average_attendance_percentage: float
+
+class AttendanceAnalyticsResponse(BaseModel):
+    department: str
+    total_enrolled: int
+    overall_attendance_pct: float
+    total_qualifying_sessions: int
+    total_attendances: int
+    shortage_count: int
+    threshold_pct: float
+    students: List[StudentAnalyticsItem]
+    sections_summary: List[SectionAnalyticsItem]
+    subjects_summary: List[SubjectAnalyticsItem]
+
+
+# ----------------- SECTION SCHEMAS -----------------
+class SectionBase(BaseModel):
+    name: str  # e.g., "CS1", "CS2", "Sec A"
+    course_code: str  # e.g., "CSE", "ECE", "ISE", "EEE"
+    semester: int = 1
+    batch_year: str = "2023-2027"
+    room_number: Optional[str] = "Room 302"
+    capacity: int = 60
+    is_active: bool = True
+
+class SectionCreate(SectionBase):
+    pass
+
+class SectionUpdate(BaseModel):
+    name: Optional[str] = None
+    course_code: Optional[str] = None
+    semester: Optional[int] = None
+    batch_year: Optional[str] = None
+    room_number: Optional[str] = None
+    capacity: Optional[int] = None
+    is_active: Optional[bool] = None
+
+class SectionResponse(SectionBase):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    created_at: datetime
+    updated_at: datetime
+
+
 

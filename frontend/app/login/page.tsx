@@ -24,7 +24,7 @@ export default function LoginPage() {
   // Form States
   const [step, setStep] = useState<"credentials" | "otp">("credentials");
   const [selectedRole, setSelectedRole] = useState<Role>("ADMIN");
-  const [email, setEmail] = useState("admin@attendance.edu");
+  const [email, setEmail] = useState("cortinexwebstudio@gmail.com");
   const [password, setPassword] = useState("admin123");
   const [otp, setOtp] = useState(["", "", "", "", "", ""]);
   
@@ -37,15 +37,11 @@ export default function LoginPage() {
 
   const otpInputsRef = useRef<(HTMLInputElement | null)[]>([]);
 
-  const handleRoleChange = (role: Role | "SUPER_ADMIN") => {
+  const handleRoleChange = (role: Role) => {
     setError(null);
-    if (role === "SUPER_ADMIN") {
+    if (role === "ADMIN") {
       setSelectedRole("ADMIN");
-      setEmail("kushalvr12@gmail.com");
-      setPassword("admin123");
-    } else if (role === "ADMIN") {
-      setSelectedRole("ADMIN");
-      setEmail("admin@attendance.edu");
+      setEmail("cortinexwebstudio@gmail.com");
       setPassword("admin123");
     } else if (role === "FACULTY") {
       setSelectedRole("FACULTY");
@@ -88,8 +84,9 @@ export default function LoginPage() {
           otpInputsRef.current[0]?.focus();
         }, 150);
       } else {
-        setSuccessMsg("Authenticated successfully! Redirecting...");
-        setTimeout(() => router.push("/dashboard"), 500);
+        const dest = result.user?.role === "FACULTY" ? "/teacher" : "/dashboard";
+        setSuccessMsg(result.user?.role === "FACULTY" ? "Authenticated! Redirecting to Teacher Portal..." : "Authenticated successfully! Redirecting...");
+        setTimeout(() => router.push(dest), 500);
       }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Authentication failed.");
@@ -140,9 +137,10 @@ export default function LoginPage() {
     setError(null);
 
     try {
-      await login(email, password, otpCode);
-      setSuccessMsg("Security verification passed! Redirecting to Dashboard...");
-      setTimeout(() => router.push("/dashboard"), 600);
+      const res = await login(email, password, otpCode);
+      const dest = res.user?.role === "FACULTY" ? "/teacher" : "/dashboard";
+      setSuccessMsg(res.user?.role === "FACULTY" ? "Security verified! Redirecting to Teacher Portal..." : "Security verification passed! Redirecting to Dashboard...");
+      setTimeout(() => router.push(dest), 600);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Invalid or expired OTP code.");
     } finally {
@@ -212,33 +210,22 @@ export default function LoginPage() {
                   <label className="text-xs font-semibold uppercase tracking-wider text-slate-500">Select Role Preset</label>
                   <span className="text-[10px] text-blue-600 font-semibold">Faculty & Admin Access</span>
                 </div>
-                <div className="grid grid-cols-3 gap-1.5 bg-slate-100 p-1.5 rounded-xl border border-slate-200">
-                  <button
-                    type="button"
-                    onClick={() => handleRoleChange("SUPER_ADMIN")}
-                    className={`py-1.5 rounded-lg text-[11px] font-bold transition truncate px-1 ${
-                      email === "kushalvr12@gmail.com"
-                        ? "bg-blue-600 text-white shadow-sm shadow-blue-600/30"
-                        : "text-slate-600 hover:text-slate-900"
-                    }`}
-                  >
-                    Super Admin
-                  </button>
+                <div className="grid grid-cols-2 gap-1.5 bg-slate-100 p-1.5 rounded-xl border border-slate-200">
                   <button
                     type="button"
                     onClick={() => handleRoleChange("ADMIN")}
-                    className={`py-1.5 rounded-lg text-[11px] font-bold transition truncate px-1 ${
-                      selectedRole === "ADMIN" && email !== "kushalvr12@gmail.com"
+                    className={`py-1.5 rounded-lg text-xs font-bold transition truncate px-2 ${
+                      selectedRole === "ADMIN"
                         ? "bg-blue-600 text-white shadow-sm shadow-blue-600/30"
                         : "text-slate-600 hover:text-slate-900"
                     }`}
                   >
-                    Admin
+                    Administrator
                   </button>
                   <button
                     type="button"
                     onClick={() => handleRoleChange("FACULTY")}
-                    className={`py-1.5 rounded-lg text-[11px] font-bold transition truncate px-1 ${
+                    className={`py-1.5 rounded-lg text-xs font-bold transition truncate px-2 ${
                       selectedRole === "FACULTY"
                         ? "bg-blue-600 text-white shadow-sm shadow-blue-600/30"
                         : "text-slate-600 hover:text-slate-900"

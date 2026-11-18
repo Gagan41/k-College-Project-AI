@@ -73,3 +73,42 @@ class Enrollment(Base, TimestampMixin):
 
     def __repr__(self):
         return f"<Enrollment Student:{self.student_id} Subject:{self.subject_id}>"
+
+class Course(Base, TimestampMixin):
+    __tablename__ = "courses"
+
+    code = Column(String(50), unique=True, index=True, nullable=False)  # e.g., "CSE", "ECE", "ME", "AIML"
+    name = Column(String(255), nullable=False)  # e.g., "Computer Science & Engineering"
+    description = Column(String(500), nullable=True)
+    is_active = Column(Boolean, default=True, nullable=False)
+
+    def __repr__(self):
+        return f"<Course {self.code}: {self.name}>"
+
+class Classroom(Base, TimestampMixin):
+    __tablename__ = "classrooms"
+
+    name = Column(String(100), unique=True, index=True, nullable=False)  # e.g., "Room 302", "Room 101", "Lab 1"
+    building = Column(String(100), default="Main Academic Block", nullable=False)
+    capacity = Column(Integer, default=60, nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False)
+
+    def __repr__(self):
+        return f"<Classroom {self.name} ({self.building})>"
+
+
+class CourseSection(Base, TimestampMixin):
+    __tablename__ = "course_sections"
+
+    name = Column(String(50), nullable=False, index=True)  # e.g., "CS1", "CS2", "Sec A"
+    course_code = Column(String(50), nullable=False, index=True)  # e.g., "CSE", "ECE", "ISE", "EEE"
+    semester = Column(Integer, default=1, nullable=False)
+    batch_year = Column(String(50), default="2023-2027", nullable=False)
+    room_number = Column(String(100), default="Room 302", nullable=True)
+    capacity = Column(Integer, default=60, nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False)
+
+    def __repr__(self):
+        return f"<CourseSection {self.course_code}-{self.name} (Sem {self.semester})>"
+
+

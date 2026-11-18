@@ -4,7 +4,9 @@ from datetime import datetime
 
 class FaceEnrollRequest(BaseModel):
     student_id: int = Field(..., description="ID of the student to enroll")
-    image_base64: str = Field(..., description="Base64 encoded JPEG/PNG frame")
+    image_base64: Optional[str] = Field(None, description="Base64 encoded JPEG/PNG frame (single capture)")
+    images_base64: Optional[List[str]] = Field(None, description="List of Base64 encoded frames (multi-angle captures: Front, Left, Right)")
+    front_image_base64: Optional[str] = Field(None, description="Base64 encoded Front profile photo to save as official student avatar")
 
 class FaceEnrollResponse(BaseModel):
     success: bool
@@ -14,6 +16,7 @@ class FaceEnrollResponse(BaseModel):
     quality_score: float
     liveness_score: float
     total_faces_enrolled: int
+    photo_url: Optional[str] = None
     message: str
 
 class FaceRecognizeRequest(BaseModel):
@@ -21,7 +24,17 @@ class FaceRecognizeRequest(BaseModel):
     camera_id: Optional[int] = None
     session_id: Optional[int] = None
     timetable_id: Optional[int] = None
+    classroom: Optional[str] = None
     auto_attendance: Optional[bool] = False
+
+class ClassroomScopingInfo(BaseModel):
+    classroom: Optional[str] = None
+    subject_code: Optional[str] = None
+    subject_name: Optional[str] = None
+    section: Optional[str] = None
+    period_number: Optional[int] = None
+    enrolled_count: int = 0
+    scoped_to_classroom: bool = False
 
 class RecognizedStudentItem(BaseModel):
     student_id: int
@@ -32,6 +45,7 @@ class RecognizedStudentItem(BaseModel):
     liveness_score: float
     spoof_detected: bool
     verification_method: str = "FACE_RECOGNITION"
+    attendance_marked: bool = True
 
 class DetectedFaceItem(BaseModel):
     bounding_box: List[int]  # [x, y, w, h]
@@ -43,6 +57,7 @@ class DetectedFaceItem(BaseModel):
     liveness_score: float = 0.0
     spoof_detected: bool = False
     verification_method: str = "FACE_RECOGNITION"
+    verification_status: str = "UNMATCHED"  # "PRESENT", "NOT_IN_CLASSROOM", "SPOOF_ALERT", "UNREGISTERED"
     landmarks: Optional[List[List[float]]] = None  # [[x, y], ...]
 
 class IDCardScanRequest(BaseModel):
@@ -65,6 +80,7 @@ class FaceRecognizeResponse(BaseModel):
     all_detected_faces: List[DetectedFaceItem] = []
     spoof_alerts: List[str] = []
     scanned_barcode: Optional[IDCardScanResponse] = None
+    classroom_info: Optional[ClassroomScopingInfo] = None
 
 class SecurityAuditResponse(BaseModel):
     id: int
