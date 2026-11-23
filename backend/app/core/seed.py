@@ -38,8 +38,10 @@ def seed_default_users(db: Session):
             existing_user.is_verified = True
             db.flush()
 
-    cam1 = db.query(Camera).filter(Camera.classroom == "Room 302").first()
-    if not cam1:
+    # Seed initial demo camera only on fresh database setup if Room 302 exists and no cameras exist
+    from app.models.academic import Classroom
+    has_room302 = db.query(Classroom).filter(Classroom.name == "Room 302").first()
+    if has_room302 and db.query(Camera).count() == 0:
         cam1 = Camera(
             name="Classroom 302 High-Angle CCTV",
             stream_url="demo",

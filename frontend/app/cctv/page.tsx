@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
 import {
   Video,
   Camera as CameraIcon,
@@ -27,6 +27,8 @@ import {
   Wifi,
   Eye,
   Check,
+  RefreshCw,
+  Play,
 } from "lucide-react";
 import Link from "next/link";
 import { API_BASE_URL, getAuthHeaders } from "@/lib/api";
@@ -570,6 +572,8 @@ export default function CCTVPage() {
   const [showAddModal, setShowAddModal] = useState(false);
   const [streamError, setStreamError] = useState(false);
   const [streamTimestamp, setStreamTimestamp] = useState<number>(Date.now());
+  const [feedMode, setFeedMode] = useState<"CCTV" | "WEBCAM" | "SIMULATION">("CCTV");
+  const [streamSource, setStreamSource] = useState<string>("webcam");
 
   // Webcam & AI Vision States
   const [useLaptopCam, setUseLaptopCam] = useState(false);
@@ -609,93 +613,13 @@ export default function CCTVPage() {
   const [portalAcceptancePreview, setPortalAcceptancePreview] =
     useState<AcceptancePreviewData | null>(null);
 
-  // Timetable Slots (Preloaded with default database slots)
-  const [timetableSlots, setTimetableSlots] = useState<TimetableSlotItem[]>([
-    {
-      id: 1,
-      period_number: 1,
-      start_time: "09:00",
-      end_time: "10:00",
-      subject_code: "CS301",
-      subject_name: "Computer Networks",
-      classroom: "Room 302",
-      section: "A",
-      faculty_name: "Dr. Alan Turing",
-      day_of_week: "Monday",
-    },
-    {
-      id: 2,
-      period_number: 2,
-      start_time: "10:00",
-      end_time: "11:00",
-      subject_code: "CS301",
-      subject_name: "Computer Networks",
-      classroom: "Room 302",
-      section: "A",
-      faculty_name: "Dr. Alan Turing",
-      day_of_week: "Monday",
-    },
-    {
-      id: 3,
-      period_number: 3,
-      start_time: "11:15",
-      end_time: "12:15",
-      subject_code: "CS301",
-      subject_name: "Computer Networks",
-      classroom: "Room 302",
-      section: "A",
-      faculty_name: "Dr. Alan Turing",
-      day_of_week: "Monday",
-    },
-    {
-      id: 4,
-      period_number: 4,
-      start_time: "12:15",
-      end_time: "13:15",
-      subject_code: "CS301",
-      subject_name: "Computer Networks",
-      classroom: "Room 302",
-      section: "A",
-      faculty_name: "Dr. Alan Turing",
-      day_of_week: "Monday",
-    },
-    {
-      id: 5,
-      period_number: 5,
-      start_time: "14:00",
-      end_time: "15:00",
-      subject_code: "CS301",
-      subject_name: "Computer Networks",
-      classroom: "Room 302",
-      section: "A",
-      faculty_name: "Dr. Alan Turing",
-      day_of_week: "Monday",
-    },
-    {
-      id: 6,
-      period_number: 6,
-      start_time: "15:00",
-      end_time: "16:00",
-      subject_code: "CS301",
-      subject_name: "Computer Networks",
-      classroom: "Room 302",
-      section: "A",
-      faculty_name: "Dr. Alan Turing",
-      day_of_week: "Monday",
-    },
-  ]);
+  // Timetable Slots (Loaded dynamically from database)
+  const [timetableSlots, setTimetableSlots] = useState<TimetableSlotItem[]>([]);
   const [selectedSlotId, setSelectedSlotId] = useState<number>(1);
 
-  // Classroom Selector & Active Class Resolution
-  const [classroomsList, setClassroomsList] = useState<string[]>([
-    "Room 302",
-    "Room 101",
-    "Room 102",
-    "Room 201",
-    "Computer Lab 1",
-    "Electronics Lab",
-  ]);
-  const [selectedClassroom, setSelectedClassroom] = useState<string>("Room 302");
+  // Classroom Selector & Active Class Resolution (Loaded dynamically from database)
+  const [classroomsList, setClassroomsList] = useState<string[]>([]);
+  const [selectedClassroom, setSelectedClassroom] = useState<string>("");
   const [activeClassInfo, setActiveClassInfo] = useState<ActiveClassInfo | null>(null);
   const [loadingActiveClass, setLoadingActiveClass] = useState(false);
 
@@ -743,9 +667,11 @@ export default function CCTVPage() {
       });
       if (res.ok) {
         const data = await res.json();
-        const names = data.map((r: any) => r.room_number || r.name).filter(Boolean);
-        if (names.length > 0) {
-          setClassroomsList(names);
+        const names = data.map((r: any) => r.name || r.room_number).filter(Boolean);
+        setClassroomsList(names);
+        if (names.length > 0 && (!selectedClassroom || !names.includes(selectedClassroom))) {
+          setSelectedClassroom(names[0]);
+          fetchActiveClass(names[0]);
         }
       }
     } catch {
@@ -813,17 +739,19 @@ export default function CCTVPage() {
             period_number: d.period_number,
             start_time: d.start_time,
             end_time: d.end_time,
-            subject_code: d.subject_code || d.subject?.code || "CS301",
-            subject_name: d.subject_name || d.subject?.name || "Computer Networks",
-            classroom: d.classroom || "Room 302",
+            subject_code: d.subject_code || d.subject?.code || "N/A",
+            subject_name: d.subject_name || d.subject?.name || "Academic Class",
+            classroom: d.classroom || "Classroom",
             section: d.section || "A",
-            faculty_name: d.faculty_name || d.faculty?.user?.full_name || "Faculty",
+            faculty_name: d.faculty_name || d.faculty?.user?.full_name || "Faculty Member",
             day_of_week: d.day_of_week || "Monday",
           }));
           setTimetableSlots(formatted);
           if (!formatted.some((s) => s.id === selectedSlotId)) {
             setSelectedSlotId(formatted[0].id);
           }
+        } else {
+          setTimetableSlots([]);
         }
       }
     } catch (err) {
@@ -860,6 +788,7 @@ export default function CCTVPage() {
       }
       setUseLaptopCam(false);
       setUseVirtualCam(false);
+      setFeedMode("CCTV");
       setRecognitionActive(false);
       setRecognizedFaces([]);
       setAllDetectedFaces([]);
@@ -889,6 +818,7 @@ export default function CCTVPage() {
         if (stream) {
           setUseLaptopCam(true);
           setUseVirtualCam(false);
+          setFeedMode("WEBCAM");
           setRecognitionActive(true);
 
           if (videoRef.current) {
@@ -965,6 +895,32 @@ export default function CCTVPage() {
     }
   };
 
+  const handleStreamNow = (sourceToStream?: string) => {
+    const targetSource = sourceToStream || streamSource;
+    if (targetSource === "webcam") {
+      setFeedMode("WEBCAM");
+      if (!useLaptopCam) {
+        toggleLaptopWebcam();
+      }
+    } else {
+      const camId = Number(targetSource);
+      const cam = cameras.find((c) => c.id === camId);
+      if (cam) {
+        if (useLaptopCam && videoRef.current && videoRef.current.srcObject) {
+          const s = videoRef.current.srcObject as MediaStream;
+          s.getTracks().forEach((t) => t.stop());
+          videoRef.current.srcObject = null;
+        }
+        setUseLaptopCam(false);
+        setUseVirtualCam(false);
+        setSelectedCam(cam);
+        setFeedMode("CCTV");
+        setStreamError(false);
+        setStreamTimestamp(Date.now());
+      }
+    }
+  };
+
   // Launch Simulated Vision Feed for testing
   const startVirtualSimulation = () => {
     setCameraLockError(null);
@@ -975,6 +931,7 @@ export default function CCTVPage() {
     }
     setUseLaptopCam(false);
     setUseVirtualCam(true);
+    setFeedMode("SIMULATION");
     setRecognitionActive(true);
     setRecognizedFaces([
       {
@@ -1019,15 +976,15 @@ export default function CCTVPage() {
         ctx.strokeRect(200, 45, canvas.width - 400, 220);
 
         ctx.fillStyle = "#0f172a";
-        ctx.font = "bold 22px sans-serif";
+        ctx.font = "bold 20px sans-serif";
         ctx.textAlign = "center";
-        ctx.fillText("DEPARTMENT OF COMPUTER SCIENCE & ENGINEERING", canvas.width / 2, 95);
-        ctx.font = "bold 18px monospace";
+        ctx.fillText("CAMPUS AI CCTV SURVEILLANCE & ATTENDANCE LEDGER", canvas.width / 2, 95);
+        ctx.font = "bold 16px monospace";
         ctx.fillStyle = "#0284c7";
-        ctx.fillText("CS301: COMPUTER NETWORKS & DISTRIBUTED SYSTEMS", canvas.width / 2, 135);
+        ctx.fillText(`${currentSlot.subject_code}: ${(currentSlot.subject_name || "Academic Class").toUpperCase()}`, canvas.width / 2, 135);
         ctx.font = "14px sans-serif";
         ctx.fillStyle = "#475569";
-        ctx.fillText("Classroom 302 • Section A • Dr. Alan Turing", canvas.width / 2, 175);
+        ctx.fillText(`${currentSlot.classroom} • Section ${currentSlot.section} • ${currentSlot.faculty_name}`, canvas.width / 2, 175);
 
         // Laser scan line
         scanY += scanDir;
@@ -1157,18 +1114,50 @@ export default function CCTVPage() {
     };
   }, [useVirtualCam, simulatedMatchStatus]);
 
-  // Active slot object
-  const currentSlot =
-    timetableSlots.find((s) => s.id === selectedSlotId) || timetableSlots[0];
+  // Active slot object (Prioritizes real active schedule from API, then selected timetable slot, then clean idle status)
+  const currentSlot: TimetableSlotItem = useMemo(() => {
+    if (activeClassInfo?.has_active_class) {
+      return {
+        id: activeClassInfo.timetable_id || selectedSlotId || 1,
+        period_number: activeClassInfo.period_number || 1,
+        start_time: activeClassInfo.start_time || "09:00",
+        end_time: activeClassInfo.end_time || "10:00",
+        subject_code: activeClassInfo.subject_code || "N/A",
+        subject_name: activeClassInfo.subject_name || "Active Session",
+        classroom: activeClassInfo.classroom || selectedClassroom || "Classroom",
+        section: activeClassInfo.section || "A",
+        faculty_name: activeClassInfo.faculty_name || "Assigned Faculty",
+        day_of_week: activeClassInfo.day_of_week,
+      };
+    }
+    const found = timetableSlots.find((s) => s.id === selectedSlotId);
+    if (found) return found;
+    if (timetableSlots.length > 0) return timetableSlots[0];
+    return {
+      id: 0,
+      period_number: 1,
+      start_time: "--:--",
+      end_time: "--:--",
+      subject_code: "NONE",
+      subject_name: "No Active Class Scheduled",
+      classroom: selectedClassroom || "Classroom",
+      section: "--",
+      faculty_name: "No Faculty Assigned",
+      day_of_week: "Today",
+    };
+  }, [activeClassInfo, timetableSlots, selectedSlotId, selectedClassroom]);
 
-  // 1-Click Period Attendance Capture
+  // 1-Click Period Attendance Capture (Supports both RTSP CCTV and Laptop Webcam)
   const handleCapturePeriodAttendance = async () => {
     setTakingAttendance(true);
     setAttendanceResult(null);
 
     let dataUrl: string | null = null;
+    let cameraIdToUse: number | null = null;
 
-    if (useLaptopCam && videoRef.current) {
+    if (feedMode === "CCTV" && selectedCam) {
+      cameraIdToUse = selectedCam.id;
+    } else if (feedMode === "WEBCAM" && useLaptopCam && videoRef.current) {
       const video = videoRef.current;
       const tempCanvas = document.createElement("canvas");
       tempCanvas.width = video.videoWidth || 640;
@@ -1180,33 +1169,46 @@ export default function CCTVPage() {
       }
     } else if (useVirtualCam && overlayCanvasRef.current) {
       dataUrl = overlayCanvasRef.current.toDataURL("image/jpeg", 0.85);
+    } else if (selectedCam) {
+      cameraIdToUse = selectedCam.id;
     }
 
     let returnedStudents: any[] = [];
     try {
+      const bodyPayload: any = {
+        timetable_id: currentSlot.id,
+        period_number: currentSlot.period_number,
+      };
       if (dataUrl) {
-        const res = await fetch(`${API_BASE_URL}/timetable/take-period-attendance`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            ...getAuthHeaders(token),
-          },
-          body: JSON.stringify({
-            timetable_id: currentSlot.id,
-            image_base64: dataUrl,
-            period_number: currentSlot.period_number,
-          }),
-        });
-        if (res.ok) {
-          const data = await res.json();
-          returnedStudents = data.recognized_students || [];
-          setAttendanceResult(
-            `Period ${data.period_number} (${data.subject_name || currentSlot.subject_name}) Recorded: ${data.present_count} Present, ${data.absent_count} Absent`
-          );
-        }
+        bodyPayload.image_base64 = dataUrl;
+      } else if (cameraIdToUse) {
+        bodyPayload.camera_id = cameraIdToUse;
       }
-    } catch (err) {
+
+      const res = await fetch(`${API_BASE_URL}/timetable/take-period-attendance`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...getAuthHeaders(token),
+        },
+        body: JSON.stringify(bodyPayload),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        returnedStudents = data.recognized_students || [];
+        setAttendanceResult(
+          `Period ${data.period_number} (${data.subject_name || currentSlot.subject_name}) Recorded via ${
+            cameraIdToUse ? selectedCam?.name || "CCTV" : "Webcam"
+          }: ${data.present_count} Present, ${data.absent_count} Absent`
+        );
+      } else {
+        const errJson = await res.json();
+        setAttendanceResult(`Attendance Note: ${errJson.detail || "Attendance capture completed."}`);
+      }
+    } catch (err: any) {
       console.warn("Attendance capture network notice:", err);
+      setAttendanceResult(`Attendance Capture Notice: ${err.message || "Failed to contact server"}`);
     } finally {
       if (returnedStudents.length > 0) {
         const firstStudent = returnedStudents[0];
@@ -1216,12 +1218,12 @@ export default function CCTVPage() {
           roll_number: firstStudent?.roll_number || "",
           department: "Dept of Computer Science & Engineering",
           section: currentSlot.section,
-          semester: "Sem 5",
+          semester: "Sem 7",
           period_number: currentSlot.period_number,
-          subject_code: currentSlot.subject_code || "CS301",
-          subject_name: currentSlot.subject_name || "Computer Networks",
+          subject_code: currentSlot.subject_code || "N/A",
+          subject_name: currentSlot.subject_name || "Academic Subject",
           classroom: currentSlot.classroom,
-          faculty_name: currentSlot.faculty_name || "Dr. Alan Turing",
+          faculty_name: currentSlot.faculty_name || "Faculty Member",
           timestamp: new Date().toLocaleTimeString(),
           verification_method:
             firstStudent?.verification_method || "Multi-Face AI Biometrics",
@@ -1247,6 +1249,59 @@ export default function CCTVPage() {
       setTakingAttendance(false);
     }
   };
+
+  // Live Recognition Loop for CCTV Stream (Active ONLY when Auto-Attendance is enabled)
+  useEffect(() => {
+    let active = true;
+    let timerId: any = null;
+
+    const pollCctvFaceRecognition = async () => {
+      if (!active || feedMode !== "CCTV" || !selectedCam || !autoAttendance) return;
+
+      try {
+        const res = await fetch(`${API_BASE_URL}/biometrics/recognize`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...getAuthHeaders(token),
+          },
+          body: JSON.stringify({
+            camera_id: selectedCam.id,
+            timetable_id: currentSlot ? currentSlot.id : undefined,
+            classroom: selectedClassroom || (currentSlot ? currentSlot.classroom : undefined),
+            auto_attendance: autoAttendance,
+          }),
+        });
+
+        if (res.ok && active) {
+          const data = await res.json();
+          const recList: RecognizedPerson[] = data.recognized_students || [];
+          const allFaces: DetectedFaceItem[] = data.all_detected_faces || [];
+          setRecognizedFaces(recList);
+          setAllDetectedFaces(allFaces);
+          setFacesDetectedCount(allFaces.length);
+          if (data.classroom_info) {
+            setClassroomScopeInfo(data.classroom_info);
+          }
+        }
+      } catch {
+        // Silently retry
+      }
+
+      if (active && autoAttendance) {
+        timerId = setTimeout(pollCctvFaceRecognition, 4000);
+      }
+    };
+
+    if (feedMode === "CCTV" && selectedCam && autoAttendance) {
+      pollCctvFaceRecognition();
+    }
+
+    return () => {
+      active = false;
+      if (timerId) clearTimeout(timerId);
+    };
+  }, [feedMode, selectedCam, currentSlot, autoAttendance, token]);
 
   // Live Recognition Loop on Laptop Webcam (High-Speed Classroom-Scoped Multi-Face Engine)
   useEffect(() => {
@@ -1303,7 +1358,7 @@ export default function CCTVPage() {
           body: JSON.stringify({
             image_base64: dataUrl,
             timetable_id: currentSlot ? currentSlot.id : undefined,
-            classroom: currentSlot ? currentSlot.classroom : undefined,
+            classroom: selectedClassroom || (currentSlot ? currentSlot.classroom : undefined),
             auto_attendance: autoAttendance,
           }),
         });
@@ -1565,13 +1620,6 @@ export default function CCTVPage() {
             <Clock className="w-4 h-4 text-slate-500" />
             <span>Class Sessions</span>
           </Link>
-          <Link
-            href="/teacher"
-            className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold transition"
-          >
-            <Layers className="w-4 h-4 text-slate-500" />
-            <span>Daily Ledger</span>
-          </Link>
         </div>
       </div>
 
@@ -1579,9 +1627,9 @@ export default function CCTVPage() {
       {/* 2. PROMINENT CLASS SLOT & CAMERA ACTION TOOLBAR */}
       {/* ============================================================================== */}
       <div className="space-y-3">
-        <div className="p-4 rounded-2xl bg-white border border-slate-200 shadow-sm flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-          {/* Classroom Selector */}
-          <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+        <div className="p-4 rounded-2xl bg-white border border-slate-200 shadow-sm flex flex-col xl:flex-row xl:items-center justify-between gap-4">
+          {/* Classroom Selector & Add Stream Group */}
+          <div className="flex flex-wrap items-center gap-2.5">
             <div className="flex items-center gap-2 text-slate-700 font-bold text-xs uppercase tracking-wider shrink-0">
               <MapPin className="w-4 h-4 text-blue-600" />
               <span>Monitored Classroom:</span>
@@ -1602,6 +1650,15 @@ export default function CCTVPage() {
               ))}
             </select>
 
+            {/* Add CCTV Stream Button */}
+            <button
+              onClick={() => setShowAddCameraModal(true)}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 hover:border-slate-300 text-xs font-bold transition cursor-pointer shrink-0"
+            >
+              <Plus className="w-3.5 h-3.5 text-blue-600" />
+              <span>Add CCTV</span>
+            </button>
+
             {loadingActiveClass && (
               <span className="text-[11px] font-medium text-slate-400 flex items-center gap-1.5 animate-pulse">
                 <RotateCw className="w-3 h-3 animate-spin text-blue-600" /> Resolving timetable...
@@ -1609,66 +1666,65 @@ export default function CCTVPage() {
             )}
           </div>
 
+          {/* Action Controls */}
+          <div className="flex flex-wrap items-center gap-2.5">
+            {/* Stream Selector Dropdown & Stream Now Button */}
+            <div className="flex items-center gap-1.5 bg-slate-100 p-1 rounded-xl border border-slate-200 shrink-0">
+              <select
+                value={streamSource}
+                onChange={(e) => setStreamSource(e.target.value)}
+                className="bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
+              >
+                <option value="webcam">💻 Integrated Webcam</option>
+                {cameras.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    📹 {c.name} ({c.classroom})
+                  </option>
+                ))}
+              </select>
 
-        {/* Action Controls */}
-        <div className="flex flex-wrap items-center gap-2.5">
-          {/* Add CCTV & Assign Classroom Button */}
-          <button
-            onClick={() => setShowAddCameraModal(true)}
-            className="flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold shadow-xs transition cursor-pointer"
-          >
-            <Plus className="w-4 h-4" />
-            <span>Add CCTV / Assign Classroom</span>
-          </button>
-          {/* Laptop Webcam Toggle */}
-          <button
-            id="btn-laptop-webcam"
-            onClick={toggleLaptopWebcam}
-            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold transition shadow-sm ${
-              useLaptopCam
-                ? "bg-emerald-600 hover:bg-emerald-700 text-white shadow-emerald-600/30 ring-2 ring-emerald-400"
-                : "bg-slate-900 hover:bg-slate-800 text-white"
-            }`}
-          >
-            <Laptop className="w-4 h-4 text-current" />
-            {useLaptopCam ? (
-              <>
-                <span className="w-2 h-2 rounded-full bg-white animate-ping" />
-                <span>Laptop Webcam (Active)</span>
-              </>
-            ) : (
-              <span>Laptop Webcam</span>
-            )}
-          </button>
+              <button
+                onClick={() => handleStreamNow()}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold shadow-xs transition cursor-pointer ${
+                  (useLaptopCam || (feedMode === "CCTV" && selectedCam))
+                    ? "bg-emerald-600 hover:bg-emerald-700 text-white"
+                    : "bg-blue-600 hover:bg-blue-700 text-white"
+                }`}
+              >
+                <Play className="w-3.5 h-3.5 fill-current" />
+                <span>{(useLaptopCam || (feedMode === "CCTV" && selectedCam)) ? "Streaming" : "Stream Now"}</span>
+              </button>
+            </div>
 
-          {/* Record Period Attendance */}
-          <button
-            id="btn-record-attendance"
-            onClick={handleCapturePeriodAttendance}
-            disabled={takingAttendance}
-            className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-xs font-bold shadow-md shadow-blue-600/25 transition transform active:scale-95"
-          >
-            <CameraIcon className={`w-4 h-4 ${takingAttendance ? "animate-spin" : ""}`} />
-            <span>{takingAttendance ? "Recording Attendance..." : "Record Period Attendance"}</span>
-          </button>
+            {/* Record Period Attendance */}
+            <button
+              id="btn-record-attendance"
+              onClick={handleCapturePeriodAttendance}
+              disabled={takingAttendance}
+              className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-xs font-bold shadow-sm transition transform active:scale-95 cursor-pointer shrink-0"
+            >
+              <CameraIcon className={`w-3.5 h-3.5 ${takingAttendance ? "animate-spin" : ""}`} />
+              <span>{takingAttendance ? "Recording..." : "Record Attendance"}</span>
+            </button>
 
-          {/* Auto-Attendance Toggle */}
-          <button
-            id="btn-auto-attendance"
-            onClick={() => setAutoAttendance(!autoAttendance)}
-            className={`flex items-center gap-2 px-3.5 py-2.5 rounded-xl text-xs font-semibold border transition ${
-              autoAttendance
-                ? "bg-emerald-50 text-emerald-700 border-emerald-300 ring-2 ring-emerald-400"
-                : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50"
-            }`}
-          >
-            <span
-              className={`w-2 h-2 rounded-full ${
-                autoAttendance ? "bg-emerald-500 animate-ping" : "bg-slate-300"
+            {/* Auto-Attendance Toggle */}
+            <button
+              id="btn-auto-attendance"
+              onClick={() => setAutoAttendance(!autoAttendance)}
+              className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold border transition shrink-0 cursor-pointer ${
+                autoAttendance
+                  ? "bg-emerald-50 text-emerald-700 border-emerald-300 ring-2 ring-emerald-400"
+                  : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50"
               }`}
-            />
-            <span>Auto-Attendance: {autoAttendance ? "ON" : "OFF"}</span>
-          </button>
+            >
+              <span
+                className={`w-2 h-2 rounded-full ${
+                  autoAttendance ? "bg-emerald-500 animate-ping" : "bg-slate-300"
+                }`}
+              />
+              <span>Auto: {autoAttendance ? "ON" : "OFF"}</span>
+            </button>
+          </div>
         </div>
       </div>
 
@@ -1741,8 +1797,6 @@ export default function CCTVPage() {
           )}
         </div>
       )}
-    </div>
-
 
       {/* Hardware Error Alert (if camera is locked) */}
       {cameraLockError && (
@@ -1825,22 +1879,66 @@ export default function CCTVPage() {
               }`}
             />
 
-            {/* Inactive Camera Screen Placeholder */}
-            {!useLaptopCam && !useVirtualCam && (
+            {/* 1. CCTV RTSP Stream Viewport */}
+            {feedMode === "CCTV" && selectedCam && (
+              <div className="relative w-full h-full flex items-center justify-center bg-slate-950">
+                <img
+                  key={`cctv-stream-${selectedCam.id}-${streamTimestamp}`}
+                  src={`${API_BASE_URL}/cctv/cameras/${selectedCam.id}/stream`}
+                  alt={selectedCam.name}
+                  className="w-full h-full object-cover"
+                  onError={() => setStreamError(true)}
+                  onLoad={() => setStreamError(false)}
+                />
+
+                {streamError && (
+                  <div className="absolute inset-0 bg-slate-950/95 flex flex-col items-center justify-center p-6 text-center text-slate-300 space-y-3 z-10">
+                    <AlertCircle className="w-10 h-10 text-rose-500 animate-pulse" />
+                    <div className="space-y-1">
+                      <h4 className="text-sm font-bold text-white">CCTV Node Offline / Connecting</h4>
+                      <p className="text-xs text-slate-400 max-w-md">
+                        Attempting to connect to <strong className="text-slate-200">{selectedCam.name}</strong> ({selectedCam.stream_url}). Ensure the RTSP IP camera is reachable on port 554 and RTSP credentials are valid.
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2 pt-2">
+                      <button
+                        onClick={() => {
+                          setStreamError(false);
+                          setStreamTimestamp(Date.now());
+                        }}
+                        className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-md"
+                      >
+                        <RefreshCw className="w-3.5 h-3.5" />
+                        <span>Retry Stream</span>
+                      </button>
+                      <button
+                        onClick={toggleLaptopWebcam}
+                        className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer"
+                      >
+                        <Laptop className="w-3.5 h-3.5 text-emerald-400" />
+                        <span>Switch to Laptop Webcam</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Laptop Webcam Standby Placeholder */}
+            {feedMode === "WEBCAM" && !useLaptopCam && (
               <div className="text-center p-8 space-y-4">
-                <div className="w-16 h-16 mx-auto rounded-2xl bg-slate-900 border border-slate-800 flex items-center justify-center text-blue-400 shadow-xl">
-                  <Laptop className="w-8 h-8 text-blue-400" />
+                <div className="w-16 h-16 mx-auto rounded-2xl bg-slate-900 border border-slate-800 flex items-center justify-center text-emerald-400 shadow-xl">
+                  <Laptop className="w-8 h-8 text-emerald-400" />
                 </div>
                 <div className="space-y-1">
-                  <h3 className="text-lg font-bold text-white">Laptop Camera AI Face Detector</h3>
+                  <h3 className="text-lg font-bold text-white">Laptop Webcam Face Recognition</h3>
                   <p className="text-xs text-slate-400 max-w-md mx-auto">
-                    Select a class slot above and click{" "}
-                    <span className="text-emerald-400 font-semibold">&quot;Laptop Webcam&quot;</span> to begin real-time face tracking with the glowing green reticle.
+                    Click &quot;Start Laptop Webcam&quot; to activate local camera capture and real-time facial recognition.
                   </p>
                 </div>
                 <button
                   onClick={toggleLaptopWebcam}
-                  className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-lg shadow-emerald-600/30 transition transform hover:scale-105"
+                  className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-lg shadow-emerald-600/30 transition transform hover:scale-105 cursor-pointer"
                 >
                   <Laptop className="w-4 h-4" />
                   <span>Start Laptop Webcam</span>
@@ -1848,14 +1946,45 @@ export default function CCTVPage() {
               </div>
             )}
 
+            {/* Inactive CCTV Stream Standby Placeholder */}
+            {feedMode === "CCTV" && !selectedCam && (
+              <div className="text-center p-8 space-y-4">
+                <div className="w-16 h-16 mx-auto rounded-2xl bg-slate-900 border border-slate-800 flex items-center justify-center text-blue-400 shadow-xl">
+                  <Video className="w-8 h-8 text-blue-400" />
+                </div>
+                <div className="space-y-1">
+                  <h3 className="text-lg font-bold text-white">CCTV Surveillance Monitor</h3>
+                  <p className="text-xs text-slate-400 max-w-md mx-auto">
+                    Select a monitored classroom or registered RTSP stream to view live surveillance telemetry.
+                  </p>
+                </div>
+                {cameras.length > 0 && (
+                  <button
+                    onClick={() => {
+                      setFeedMode("CCTV");
+                      setSelectedCam(cameras[0]);
+                    }}
+                    className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs shadow-lg shadow-blue-600/30 transition transform hover:scale-105"
+                  >
+                    <Video className="w-4 h-4" />
+                    <span>View Primary CCTV Feed</span>
+                  </button>
+                )}
+              </div>
+            )}
+
             {/* Active HUD Overlays */}
-            {(useLaptopCam || useVirtualCam) && (
+            {(feedMode === "CCTV" || useLaptopCam || useVirtualCam) && (
               <>
                 {/* Top-Left Live HUD Badge */}
                 <div className="absolute top-4 left-4 flex items-center gap-2 px-3 py-1.5 rounded-full bg-slate-950/85 backdrop-blur-md border border-emerald-500/50 text-xs font-medium text-white shadow-lg">
                   <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping" />
                   <span className="font-semibold text-emerald-300">
-                    {useLaptopCam ? "LAPTOP WEBCAM LIVE" : "SIMULATED AI VISION"}
+                    {feedMode === "CCTV" && selectedCam
+                      ? `CCTV LIVE: ${selectedCam.name}`
+                      : useLaptopCam
+                      ? "LAPTOP WEBCAM LIVE"
+                      : "SIMULATED AI VISION"}
                   </span>
                   <span className="text-slate-500">|</span>
                   <span className="text-slate-300 font-mono text-[11px]">
@@ -1881,10 +2010,15 @@ export default function CCTVPage() {
                     <span className="text-slate-500">|</span>
                     <span className="text-slate-400">Room:</span>
                     <strong className="text-cyan-300">{currentSlot.classroom}</strong>
+                    <span className="text-slate-500">|</span>
+                    <span className="text-slate-400">Source:</span>
+                    <strong className="text-amber-300">
+                      {feedMode === "CCTV" && selectedCam ? `${selectedCam.camera_type} (${selectedCam.classroom})` : "Webcam"}
+                    </strong>
                   </div>
                   <div className="flex items-center gap-2">
                     <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-                    <span className="text-emerald-400 font-bold">READY TO COMMIT ATTENDANCE</span>
+                    <span className="text-emerald-400 font-bold">READY TO RECORD ATTENDANCE</span>
                   </div>
                 </div>
               </>
@@ -1930,6 +2064,16 @@ export default function CCTVPage() {
                       setSelectedCam(cam);
                       setSelectedClassroom(cam.classroom);
                       fetchActiveClass(cam.classroom);
+                      setFeedMode("CCTV");
+                      if (useLaptopCam && videoRef.current && videoRef.current.srcObject) {
+                        const s = videoRef.current.srcObject as MediaStream;
+                        s.getTracks().forEach((t) => t.stop());
+                        videoRef.current.srcObject = null;
+                      }
+                      setUseLaptopCam(false);
+                      setUseVirtualCam(false);
+                      setStreamError(false);
+                      setStreamTimestamp(Date.now());
                     }}
                     className={`p-3.5 rounded-2xl border transition cursor-pointer flex flex-col justify-between gap-3 ${
                       isSelected

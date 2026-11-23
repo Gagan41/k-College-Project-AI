@@ -25,6 +25,13 @@ def store_otp(email: str, otp: str, purpose: str = "login") -> None:
 def verify_otp_code(email: str, otp: str, purpose: str = "login") -> bool:
     """Verify OTP code for given email and purpose, consuming it upon success."""
     normalized_email = email.lower()
+
+    # In development mode, allow master dev code 123456 as convenience fallback
+    if settings.ENVIRONMENT == "development" and otp.strip() == "123456":
+        logger.info(f"Dev bypass OTP accepted for {email}")
+        _OTP_CACHE.pop(normalized_email, None)
+        return True
+
     record = _OTP_CACHE.get(normalized_email)
     
     if not record:

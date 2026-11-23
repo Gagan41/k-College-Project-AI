@@ -28,6 +28,7 @@ import { useAuth } from "@/context/AuthContext";
 
 interface TimetableSlot {
   id: number;
+  period_number?: number | null;
   subject_id: number;
   faculty_id: number;
   camera_id?: number | null;
@@ -103,21 +104,21 @@ const COURSES = [
   { id: "EEE", name: "Electrical & Electronics" },
 ];
 
-const ROOMS = ["Room 302", "Room 301", "Room 303", "Room 304", "Lab 1", "Lab 2", "Seminar Hall"];
-
 export default function TimetablePage() {
   const { token } = useAuth();
+  const [coursesList, setCoursesList] = useState<{ id: number; code: string; name: string }[]>([]);
   const [slots, setSlots] = useState<TimetableSlot[]>([]);
   const [subjects, setSubjects] = useState<SubjectItem[]>([]);
   const [facultyList, setFacultyList] = useState<FacultyItem[]>([]);
   const [courseSections, setCourseSections] = useState<SectionItem[]>([]);
+  const [availableRooms, setAvailableRooms] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
 
   // CORE SELECTIONS: Course, Semester, Class/Section, and Room Number
   const [selectedCourse, setSelectedCourse] = useState("CSE");
   const [selectedSemester, setSelectedSemester] = useState<number>(7);
-  const [selectedClass, setSelectedClass] = useState("CS2");
-  const [selectedRoom, setSelectedRoom] = useState("Room 302");
+  const [selectedClass, setSelectedClass] = useState("");
+  const [selectedRoom, setSelectedRoom] = useState("");
 
   // Periods configuration with localStorage persistence
   const [periods, setPeriods] = useState<TimePeriodConfig[]>(DEFAULT_PERIODS);
@@ -191,6 +192,52 @@ export default function TimetablePage() {
   const [parsedRows, setParsedRows] = useState<any[]>([]);
   const [importingExcel, setImportingExcel] = useState(false);
 
+  // Handler to assign a physical classroom to the active class section
+  const handleRoomChange = async (newRoom: string) => {
+    setSelectedRoom(newRoom);
+    const activeSec = courseSections.find((s) => s.name === selectedClass);
+    if (activeSec && token) {
+      try {
+        const res = await fetch(`${API_BASE_URL}/academic/sections/${activeSec.id}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json", ...getAuthHeaders(token) },
+          body: JSON.stringify({ room_number: newRoom }),
+        });
+        if (res.ok) {
+          setBanner({
+            type: "success",
+            msg: `Classroom '${newRoom}' successfully assigned to Section '${selectedClass}'.`,
+          });
+          setCourseSections((prev) =>
+            prev.map((s) => (s.id === activeSec.id ? { ...s, room_number: newRoom } : s))
+          );
+        }
+      } catch (err) {
+        console.error("Failed to assign room:", err);
+      }
+    }
+  };
+
+  useEffect(() => {
+    const loadCourses = async () => {
+      try {
+        const res = await fetch(`${API_BASE_URL}/academic/courses`, {
+          headers: getAuthHeaders(token),
+        });
+        if (res.ok) {
+          const courses = await res.json();
+          setCoursesList(courses);
+          if (courses.length > 0 && !courses.some((c: any) => c.code === selectedCourse)) {
+            setSelectedCourse(courses[0].code);
+          }
+        }
+      } catch (err) {
+        console.error("Failed to load courses:", err);
+      }
+    };
+    loadCourses();
+  }, [token]);
+
   // Load Course Sections whenever selectedCourse changes
   useEffect(() => {
     const loadSectionsForCourse = async () => {
@@ -205,7 +252,7 @@ export default function TimetablePage() {
             setSelectedClass(secs[0].name);
             if (secs[0].room_number) setSelectedRoom(secs[0].room_number);
           } else {
-            setSelectedClass(`${selectedCourse}1`);
+            setSelectedClass("");
           }
         }
       } catch (err) {
@@ -226,11 +273,25 @@ export default function TimetablePage() {
         semester: selectedSemester.toString(),
       });
 
-      const [resSlots, resSub, resFac] = await Promise.all([
+      const [resSlots, resSub, resFac, resRooms] = await Promise.all([
         fetch(`${API_BASE_URL}/timetable?${params.toString()}`, { headers }),
         fetch(`${API_BASE_URL}/academic/subjects`, { headers }),
         fetch(`${API_BASE_URL}/academic/faculty`, { headers }),
+        fetch(`${API_BASE_URL}/academic/classrooms`, { headers }),
       ]);
+
+      if (resRooms.ok) {
+        const roomsData = await resRooms.json();
+        const roomNames = roomsData.map((r: any) => r.name || r.room_number).filter(Boolean);
+        setAvailableRooms(roomNames);
+        if (roomNames.length > 0) {
+          if (!selectedRoom || !roomNames.includes(selectedRoom)) {
+            setSelectedRoom(roomNames[0]);
+          }
+        } else {
+          setSelectedRoom("Unassigned");
+        }
+      }
 
       if (resSlots.ok) {
         setSlots(await resSlots.json());
@@ -545,14 +606,37 @@ export default function TimetablePage() {
     document.body.removeChild(link);
   };
 
-  // Find slot for day and start time
+  // Normalize time strings like "08:30" and "8:30" to comparable integer minutes or clean string
+  const normalizeTimeStr = (t?: string) => {
+    if (!t) return "";
+    const clean = t.trim();
+    const parts = clean.split(":");
+    if (parts.length < 2) return clean;
+    const h = parseInt(parts[0], 10);
+    const m = parts[1].padStart(2, "0");
+    return `${h}:${m}`;
+  };
+
   const getSlot = (day: string, period: TimePeriodConfig) => {
-    return slots.find(
-      (s) =>
-        s.day_of_week.toLowerCase() === day.toLowerCase() &&
-        (s.start_time === period.start ||
-          (s.start_time <= period.start && s.end_time >= period.end))
-    );
+    const pStart = normalizeTimeStr(period.start);
+    const pEnd = normalizeTimeStr(period.end);
+
+    return slots.find((s) => {
+      if (s.day_of_week.trim().toLowerCase() !== day.trim().toLowerCase()) {
+        return false;
+      }
+      const sStart = normalizeTimeStr(s.start_time);
+      const sEnd = normalizeTimeStr(s.end_time);
+
+      const pNum = parseInt(period.id.replace(/\D/g, ""), 10);
+      if (s.period_number && !isNaN(pNum) && s.period_number === pNum) {
+        return true;
+      }
+      if (sStart === pStart) {
+        return true;
+      }
+      return Boolean(sStart && pStart && sStart <= pStart && sEnd >= pEnd);
+    });
   };
 
   return (
@@ -562,25 +646,29 @@ export default function TimetablePage() {
       ========================================================================= */}
       <div className="bg-white border border-slate-200/90 rounded-3xl p-5 shadow-xs flex flex-wrap items-center justify-between gap-4">
         <div className="flex flex-wrap items-center gap-3">
-          {/* 1. Course Division */}
+          {/* 1. Course Division (Loaded dynamically from database) */}
           <div>
             <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block mb-1">
               Course
             </label>
-            <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl border border-slate-200">
-              {COURSES.map((c) => (
-                <button
-                  key={c.id}
-                  onClick={() => setSelectedCourse(c.id)}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
-                    selectedCourse === c.id
-                      ? "bg-blue-600 text-white shadow-xs"
-                      : "text-slate-600 hover:text-slate-900"
-                  }`}
-                >
-                  {c.id}
-                </button>
-              ))}
+            <div className="flex flex-wrap items-center gap-1 bg-slate-100 p-1 rounded-xl border border-slate-200">
+              {coursesList.length > 0 ? (
+                coursesList.map((c) => (
+                  <button
+                    key={c.id}
+                    onClick={() => setSelectedCourse(c.code)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
+                      selectedCourse === c.code
+                        ? "bg-blue-600 text-white shadow-xs"
+                        : "text-slate-600 hover:text-slate-900"
+                    }`}
+                  >
+                    {c.code}
+                  </button>
+                ))
+              ) : (
+                <span className="text-[11px] text-slate-400 px-2 py-1">No Courses Configured</span>
+              )}
             </div>
           </div>
 
@@ -609,7 +697,14 @@ export default function TimetablePage() {
             </label>
             <select
               value={selectedClass}
-              onChange={(e) => setSelectedClass(e.target.value)}
+              onChange={(e) => {
+                const newClass = e.target.value;
+                setSelectedClass(newClass);
+                const matchedSec = courseSections.find((s) => s.name === newClass);
+                if (matchedSec?.room_number) {
+                  setSelectedRoom(matchedSec.room_number);
+                }
+              }}
               className="bg-indigo-50 border border-indigo-200 rounded-xl px-3 py-2 text-xs font-bold text-indigo-900 focus:outline-none focus:ring-2 focus:ring-indigo-500"
             >
               {courseSections.length > 0 ? (
@@ -619,12 +714,7 @@ export default function TimetablePage() {
                   </option>
                 ))
               ) : (
-                <>
-                  <option value={`${selectedCourse}1`}>{selectedCourse}1</option>
-                  <option value={`${selectedCourse}2`}>{selectedCourse}2</option>
-                  <option value="Sec A">Sec A</option>
-                  <option value="Sec B">Sec B</option>
-                </>
+                <option value="">No Sections Found — Add in Academic</option>
               )}
             </select>
           </div>
@@ -636,14 +726,18 @@ export default function TimetablePage() {
             </label>
             <select
               value={selectedRoom}
-              onChange={(e) => setSelectedRoom(e.target.value)}
+              onChange={(e) => handleRoomChange(e.target.value)}
               className="bg-emerald-50 border border-emerald-200 rounded-xl px-3 py-2 text-xs font-bold text-emerald-900 focus:outline-none focus:ring-2 focus:ring-emerald-500"
             >
-              {ROOMS.map((r) => (
-                <option key={r} value={r}>
-                  {r}
-                </option>
-              ))}
+              {availableRooms.length > 0 ? (
+                availableRooms.map((r) => (
+                  <option key={r} value={r}>
+                    {r}
+                  </option>
+                ))
+              ) : (
+                <option value="Unassigned">No Registered Classrooms</option>
+              )}
             </select>
           </div>
         </div>
@@ -711,14 +805,17 @@ export default function TimetablePage() {
             </div>
             <div>
               <h2 className="text-base font-bold text-slate-900">
-                {selectedCourse} &bull; Class {selectedClass} (Semester {selectedSemester})
+                {selectedCourse} &bull; Class {selectedClass || "Unselected"} (Semester {selectedSemester})
               </h2>
-              <p className="text-xs text-slate-500 flex items-center gap-2 mt-0.5">
-                <MapPin className="w-3.5 h-3.5 text-emerald-600" />
-                <span className="font-semibold text-slate-700">{selectedRoom}</span>
-                <span>&bull;</span>
-                <span>Click any card to edit slot timings, room, or subject &bull; Select teacher below</span>
-              </p>
+              <div className="flex flex-wrap items-center gap-2 mt-1">
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-800 font-bold text-xs">
+                  <MapPin className="w-3.5 h-3.5 text-emerald-600" />
+                  Assigned Classroom: {selectedRoom || "Unassigned"}
+                </span>
+                <span className="text-xs text-slate-500">
+                  &bull; Select Room Number dropdown above to assign or reassign room for this class
+                </span>
+              </div>
             </div>
           </div>
 
@@ -987,11 +1084,15 @@ export default function TimetablePage() {
                   onChange={(e) => setEditForm({ ...editForm, classroom: e.target.value })}
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 font-semibold"
                 >
-                  {ROOMS.map((r) => (
-                    <option key={r} value={r}>
-                      {r}
-                    </option>
-                  ))}
+                  {availableRooms.length > 0 ? (
+                    availableRooms.map((r) => (
+                      <option key={r} value={r}>
+                        {r}
+                      </option>
+                    ))
+                  ) : (
+                    <option value="Unassigned">No Classrooms Available</option>
+                  )}
                 </select>
               </div>
 

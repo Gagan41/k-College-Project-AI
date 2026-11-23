@@ -20,7 +20,7 @@ class FaceEnrollResponse(BaseModel):
     message: str
 
 class FaceRecognizeRequest(BaseModel):
-    image_base64: str = Field(..., description="Base64 encoded camera frame")
+    image_base64: Optional[str] = Field(None, description="Optional Base64 encoded camera frame")
     camera_id: Optional[int] = None
     session_id: Optional[int] = None
     timetable_id: Optional[int] = None

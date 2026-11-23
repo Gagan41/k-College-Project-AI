@@ -98,15 +98,17 @@ function AttendancePageContent() {
   // Filters (Not locked to 9 to 10!)
   const [deptFilter, setDeptFilter] = useState("ALL");
   const [semFilter, setSemFilter] = useState("7");
-  const [secFilter, setSecFilter] = useState("CS2");
+  const [secFilter, setSecFilter] = useState("ALL");
   const [searchQuery, setSearchQuery] = useState("");
   const [shortageOnly, setShortageOnly] = useState(false);
 
   // Metadata Lists
   const [subjects, setSubjects] = useState<SubjectItem[]>([]);
   const [classrooms, setClassrooms] = useState<ClassroomItem[]>([]);
-  const [selectedSubjectCode, setSelectedSubjectCode] = useState<string>("BCS701");
-  const [selectedClassroom, setSelectedClassroom] = useState<string>("Room 302");
+  const [sectionsList, setSectionsList] = useState<{ id: number; name: string }[]>([]);
+  const [coursesList, setCoursesList] = useState<{ id: number; code: string; name: string }[]>([]);
+  const [selectedSubjectCode, setSelectedSubjectCode] = useState<string>("");
+  const [selectedClassroom, setSelectedClassroom] = useState<string>("");
 
   // Data States
   const [analyticsData, setAnalyticsData] = useState<AttendanceAnalyticsResponse | null>(null);
@@ -122,15 +124,22 @@ function AttendancePageContent() {
   const [finalizing, setFinalizing] = useState(false);
   const [sendingEmail, setSendingEmail] = useState(false);
 
-  // Load Subjects and Classrooms
+  // Load Subjects, Classrooms and Sections
   useEffect(() => {
     const loadMetadata = async () => {
       try {
         const headers = getAuthHeaders(token);
-        const [resSub, resRoom] = await Promise.all([
+        const [resSub, resRoom, resSec, resCourses] = await Promise.all([
           fetch(`${API_BASE_URL}/academic/subjects`, { headers }),
           fetch(`${API_BASE_URL}/academic/classrooms`, { headers }),
+          fetch(`${API_BASE_URL}/academic/sections`, { headers }),
+          fetch(`${API_BASE_URL}/academic/courses`, { headers }),
         ]);
+
+        if (resCourses.ok) {
+          const coursesData = await resCourses.json();
+          setCoursesList(coursesData);
+        }
 
         if (resSub.ok) {
           const subData = await resSub.json();
@@ -145,6 +154,10 @@ function AttendancePageContent() {
           if (roomData.length > 0 && !roomData.some((r: ClassroomItem) => r.room_number === selectedClassroom)) {
             setSelectedClassroom(roomData[0].room_number);
           }
+        }
+        if (resSec.ok) {
+          const secData = await resSec.json();
+          setSectionsList(secData);
         }
       } catch (err) {
         console.error("Failed to load metadata:", err);
@@ -376,9 +389,11 @@ function AttendancePageContent() {
                   className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs font-semibold text-slate-800"
                 >
                   <option value="ALL">All Departments</option>
-                  <option value="Computer Science & Engineering">Computer Science & Engineering</option>
-                  <option value="Electronics & Communication">Electronics & Communication</option>
-                  <option value="Mechanical Engineering">Mechanical Engineering</option>
+                  {coursesList.map((c) => (
+                    <option key={c.id} value={c.name}>
+                      {c.name}
+                    </option>
+                  ))}
                 </select>
               </div>
 
@@ -406,10 +421,11 @@ function AttendancePageContent() {
                   className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs font-semibold text-slate-800"
                 >
                   <option value="ALL">All Sections</option>
-                  <option value="CS2">CS2</option>
-                  <option value="CS1">CS1</option>
-                  <option value="A">Section A</option>
-                  <option value="B">Section B</option>
+                  {sectionsList.map((sec) => (
+                    <option key={sec.id} value={sec.name}>
+                      {sec.name}
+                    </option>
+                  ))}
                 </select>
               </div>
             </div>

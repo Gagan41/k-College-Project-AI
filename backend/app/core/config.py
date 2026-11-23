@@ -26,7 +26,11 @@ class Settings(BaseSettings):
     BACKEND_PORT: int = int(os.getenv("BACKEND_PORT", "8000"))
     
     # Database Configuration (Supabase PostgreSQL / SQLite fallback)
-    DATABASE_URL: str = os.getenv("DATABASE_URL", "sqlite:///./attendance.db")
+    DATABASE_URL: str = (
+        f"sqlite:///{os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 'attendance.db').replace(chr(92), '/')}"
+        if os.getenv("DATABASE_URL", "sqlite:///./attendance.db").startswith("sqlite:///.")
+        else os.getenv("DATABASE_URL", "sqlite:///./attendance.db")
+    )
     SUPABASE_URL: str = os.getenv("SUPABASE_URL", "")
     SUPABASE_ANON_KEY: str = os.getenv("SUPABASE_ANON_KEY", "")
     SUPABASE_SERVICE_ROLE_KEY: str = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
@@ -81,8 +85,9 @@ class Settings(BaseSettings):
     @field_validator("DATABASE_URL", mode="before")
     @classmethod
     def assemble_db_connection(cls, v: str) -> str:
-        if not v or v.strip() == "":
-            return "sqlite:///./attendance.db"
+        if not v or v.strip() == "" or v.startswith("sqlite:///."):
+            root_db = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "attendance.db").replace("\\", "/")
+            return f"sqlite:///{root_db}"
         if v.startswith("postgres://"):
             v = v.replace("postgres://", "postgresql://", 1)
         return v

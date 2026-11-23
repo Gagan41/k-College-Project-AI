@@ -360,9 +360,18 @@ def recognize_face_frame(
     db: Session = Depends(get_db)
 ):
     """Test facial recognition on a frame against all enrolled student embeddings."""
-    image = decode_base64_image(req.image_base64)
+    image = None
+    if req.image_base64:
+        image = decode_base64_image(req.image_base64)
+    elif req.camera_id:
+        from app.models.cctv import Camera
+        from app.services.cctv_service import cctv_manager
+        cam = db.query(Camera).filter(Camera.id == req.camera_id, Camera.is_active == True).first()
+        if cam:
+            _, image = cctv_manager.capture_frame(cam)
+
     if image is None:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid image")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid image or unable to grab frame from camera")
 
     effective_session_id = req.session_id
     timetable = None
@@ -406,26 +415,76 @@ def recognize_face_frame(
         except Exception as sess_err:
             logger.debug(f"Auto session resolution note: {sess_err}")
 
+    # Determine Monitored Classroom target
+    target_room = (req.classroom or "").strip()
+    if not target_room and timetable and timetable.classroom:
+        target_room = timetable.classroom.strip()
+    if not target_room and req.camera_id:
+        from app.models.cctv import Camera
+        cam_obj = db.query(Camera).filter(Camera.id == req.camera_id).first()
+        if cam_obj and cam_obj.classroom:
+            target_room = cam_obj.classroom.strip()
+
     # Determine Classroom Student Scope (Only search students assigned inside this classroom)
     classroom_student_ids = None
-    if timetable:
+    is_room_scoped = False
+
+    if target_room:
+        is_room_scoped = True
+        classroom_student_ids = set()
         try:
-            from app.models.academic import Enrollment
-            enrolled_ids = [
-                r[0] for r in db.query(Enrollment.student_id).filter(
-                    Enrollment.subject_id == timetable.subject_id,
-                    Enrollment.status == "ENROLLED"
-                ).all()
-            ]
-            section_ids = [
-                r[0] for r in db.query(Student.id).filter(
-                    Student.section == timetable.section,
-                    Student.batch_year == timetable.batch_year
-                ).all()
-            ]
-            combined = set(enrolled_ids) | set(section_ids)
-            if combined:
-                classroom_student_ids = combined
+            from app.models.academic import Enrollment, CourseSection
+            from app.models.timetable import Timetable
+            # 1. Students from active timetable in this classroom
+            if timetable and timetable.classroom and timetable.classroom.strip().upper() == target_room.upper():
+                enrolled_ids = [
+                    r[0] for r in db.query(Enrollment.student_id).filter(
+                        Enrollment.subject_id == timetable.subject_id,
+                        Enrollment.status == "ENROLLED"
+                    ).all()
+                ]
+                sec_ids = [
+                    r[0] for r in db.query(Student.id).filter(
+                        Student.section == timetable.section,
+                        Student.batch_year == timetable.batch_year
+                    ).all()
+                ]
+                classroom_student_ids.update(enrolled_ids)
+                classroom_student_ids.update(sec_ids)
+
+            # 2. Students assigned to CourseSections physically mapped to this room
+            sections_in_room = db.query(CourseSection).filter(
+                CourseSection.room_number.ilike(f"%{target_room}%"),
+                CourseSection.is_active == True
+            ).all()
+            for sec in sections_in_room:
+                sec_student_ids = [
+                    r[0] for r in db.query(Student.id).filter(
+                        Student.section == sec.name
+                    ).all()
+                ]
+                classroom_student_ids.update(sec_student_ids)
+
+            # 3. Any timetable scheduled in this classroom
+            room_slots = db.query(Timetable).filter(
+                Timetable.classroom.ilike(f"%{target_room}%"),
+                Timetable.is_active == True
+            ).all()
+            for slot in room_slots:
+                slot_enrolled = [
+                    r[0] for r in db.query(Enrollment.student_id).filter(
+                        Enrollment.subject_id == slot.subject_id,
+                        Enrollment.status == "ENROLLED"
+                    ).all()
+                ]
+                slot_sec_ids = [
+                    r[0] for r in db.query(Student.id).filter(
+                        Student.section == slot.section,
+                        Student.batch_year == slot.batch_year
+                    ).all()
+                ]
+                classroom_student_ids.update(slot_enrolled)
+                classroom_student_ids.update(slot_sec_ids)
         except Exception as scope_err:
             logger.debug(f"Classroom student scoping note: {scope_err}")
 
@@ -503,13 +562,17 @@ def recognize_face_frame(
     faces, raw_faces = detect_faces_detailed(image)
     if faces:
         # Load embeddings scoped strictly to Classroom Students
-        if classroom_student_ids:
-            all_embeddings = db.query(StudentFaceEmbedding).filter(
-                StudentFaceEmbedding.student_id.in_(classroom_student_ids)
-            ).all()
-            student_map = {
-                s.id: s for s in db.query(Student).filter(Student.id.in_(classroom_student_ids)).all()
-            }
+        if is_room_scoped:
+            if classroom_student_ids:
+                all_embeddings = db.query(StudentFaceEmbedding).filter(
+                    StudentFaceEmbedding.student_id.in_(classroom_student_ids)
+                ).all()
+                student_map = {
+                    s.id: s for s in db.query(Student).filter(Student.id.in_(classroom_student_ids)).all()
+                }
+            else:
+                all_embeddings = []
+                student_map = {}
         else:
             all_embeddings = db.query(StudentFaceEmbedding).all()
             student_map = {s.id: s for s in db.query(Student).all()}
@@ -638,18 +701,27 @@ def recognize_face_frame(
             else:
                 # Determine unmatched reason (Spoof / Not In Classroom / Unregistered)
                 status_tag = "UNREGISTERED"
+                outsider_name = None
+                outsider_roll = None
+                outsider_id = None
                 if is_spoof:
                     status_tag = "SPOOF_ALERT"
-                elif classroom_student_ids:
+                elif is_room_scoped:
                     # Check if enrolled student belonging to another section/classroom
-                    other_embs = db.query(StudentFaceEmbedding).filter(
-                        ~StudentFaceEmbedding.student_id.in_(classroom_student_ids)
-                    ).all()
+                    other_query = db.query(StudentFaceEmbedding)
+                    if classroom_student_ids:
+                        other_query = other_query.filter(~StudentFaceEmbedding.student_id.in_(classroom_student_ids))
+                    other_embs = other_query.all()
                     for oe in other_embs:
                         try:
                             ovec = json.loads(oe.embedding)
                             if compute_cosine_similarity(emb, ovec) >= SFACE_MATCH_THRESHOLD:
                                 status_tag = "NOT_IN_CLASSROOM"
+                                out_s = db.query(Student).filter(Student.id == oe.student_id).first()
+                                if out_s:
+                                    outsider_name = out_s.user.full_name
+                                    outsider_roll = out_s.student_id
+                                    outsider_id = out_s.id
                                 break
                         except Exception:
                             pass
@@ -658,9 +730,9 @@ def recognize_face_frame(
                     DetectedFaceItem(
                         bounding_box=[int(x), int(y), int(w), int(h)],
                         is_recognized=False,
-                        student_id=None,
-                        roll_number=None,
-                        full_name=None,
+                        student_id=outsider_id if status_tag == "NOT_IN_CLASSROOM" else None,
+                        roll_number=outsider_roll if status_tag == "NOT_IN_CLASSROOM" else None,
+                        full_name=f"{outsider_name} (Outside Class)" if outsider_name else None,
                         confidence=display_confidence if best_student else 0.0,
                         liveness_score=liveness,
                         spoof_detected=is_spoof,
@@ -671,15 +743,15 @@ def recognize_face_frame(
                 )
 
     classroom_info = None
-    if timetable:
+    if target_room:
         classroom_info = ClassroomScopingInfo(
-            classroom=timetable.classroom,
-            subject_code=timetable.subject.code if timetable.subject else None,
-            subject_name=timetable.subject.name if timetable.subject else None,
-            section=timetable.section,
-            period_number=timetable.period_number,
-            enrolled_count=len(classroom_student_ids) if classroom_student_ids else len(student_map),
-            scoped_to_classroom=bool(classroom_student_ids)
+            classroom=target_room,
+            subject_code=timetable.subject.code if timetable and timetable.subject else None,
+            subject_name=timetable.subject.name if timetable and timetable.subject else None,
+            section=timetable.section if timetable else None,
+            period_number=timetable.period_number if timetable else None,
+            enrolled_count=len(classroom_student_ids) if classroom_student_ids is not None else len(student_map),
+            scoped_to_classroom=is_room_scoped
         )
 
     return FaceRecognizeResponse(
@@ -765,10 +837,12 @@ def get_demo_kushal_photo():
     """Returns base64 data URI of Kushal VR's test photo for instant offline/locked webcam testing."""
     import os, glob, base64
     candidate_paths = [
+        "backend/uploads/student_photos/student_2.jpg",
+        "uploads/student_photos/student_2.jpg",
+        "backend/uploads/student_photos/student_1.jpg",
+        "uploads/student_photos/student_1.jpg",
         "My photo for test/image.png",
         "../My photo for test/image.png",
-        "My photo for test/image copy 3.png",
-        "../My photo for test/image copy 3.png",
     ]
     for p in candidate_paths:
         if os.path.exists(p):

@@ -46,10 +46,17 @@ interface FacultyItem {
   };
 }
 
+interface CourseItem {
+  id: number;
+  code: string;
+  name: string;
+}
+
 export default function FacultyManagementPage() {
   const { token } = useAuth();
   const [facultyList, setFacultyList] = useState<FacultyItem[]>([]);
   const [subjectsList, setSubjectsList] = useState<SubjectItem[]>([]);
+  const [coursesList, setCoursesList] = useState<CourseItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [deptFilter, setDeptFilter] = useState("ALL");
@@ -69,7 +76,7 @@ export default function FacultyManagementPage() {
     full_name: "",
     email: "",
     employee_id: "",
-    department: "Computer Science & Engineering",
+    department: "",
     designation: "Assistant Professor",
     password: "",
   });
@@ -77,9 +84,9 @@ export default function FacultyManagementPage() {
 
   // Assign Class Teacher Form State
   const [assignForm, setAssignForm] = useState({
-    department: "Computer Science & Engineering",
+    department: "",
     semester: 7,
-    section: "CS2",
+    section: "",
   });
   const [submittingAssign, setSubmittingAssign] = useState(false);
   const [submittingSubjectAssign, setSubmittingSubjectAssign] = useState(false);
@@ -88,10 +95,19 @@ export default function FacultyManagementPage() {
     try {
       setLoading(true);
       const headers = getAuthHeaders(token);
-      const [resFac, resSub] = await Promise.all([
+      const [resFac, resSub, resCourses] = await Promise.all([
         fetch(`${API_BASE_URL}/academic/faculty`, { headers }),
         fetch(`${API_BASE_URL}/academic/subjects`, { headers }),
+        fetch(`${API_BASE_URL}/academic/courses`, { headers }),
       ]);
+
+      if (resCourses.ok) {
+        const cData: CourseItem[] = await resCourses.json();
+        setCoursesList(cData);
+        if (cData.length > 0) {
+          setAddForm((prev) => ({ ...prev, department: prev.department || cData[0].name }));
+        }
+      }
 
       let subjectsData: SubjectItem[] = [];
       if (resSub.ok) {
@@ -138,9 +154,12 @@ export default function FacultyManagementPage() {
 
   // Unique departments for filter
   const departments = useMemo(() => {
-    const set = new Set(facultyList.map((f) => f.department));
+    const set = new Set([
+      ...facultyList.map((f) => f.department),
+      ...coursesList.map((c) => c.name),
+    ].filter(Boolean));
     return Array.from(set);
-  }, [facultyList]);
+  }, [facultyList, coursesList]);
 
   // Filtered Faculty
   const filteredFaculty = useMemo(() => {
@@ -487,7 +506,6 @@ export default function FacultyManagementPage() {
                   <th className="py-3 px-6">Faculty Member</th>
                   <th className="py-3 px-4">Employee ID</th>
                   <th className="py-3 px-4">Assigned Subjects (Teaching)</th>
-                  <th className="py-3 px-4">Class Teacher Cohort</th>
                   <th className="py-3 px-6 text-right">Actions</th>
                 </tr>
               </thead>
@@ -554,19 +572,6 @@ export default function FacultyManagementPage() {
                         )}
                       </td>
 
-                      <td className="py-3.5 px-4">
-                        {isClassTeacher ? (
-                          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-indigo-50 border border-indigo-200 text-indigo-700 text-xs font-bold">
-                            <School className="w-3.5 h-3.5 text-indigo-600" />
-                            <span>{faculty.class_teacher_cohort}</span>
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-slate-100 text-slate-400 text-[11px]">
-                            None Assigned
-                          </span>
-                        )}
-                      </td>
-
                       <td className="py-3.5 px-6 text-right">
                         <div className="flex items-center justify-end gap-2">
                           <button
@@ -579,21 +584,6 @@ export default function FacultyManagementPage() {
                           >
                             <BookOpen className="w-3.5 h-3.5" />
                             <span>Assign Subject</span>
-                          </button>
-
-                          <button
-                            onClick={() => {
-                              setAssignModalFaculty(faculty);
-                              setAssignForm({
-                                department: faculty.department,
-                                semester: 7,
-                                section: "CS2",
-                              });
-                            }}
-                            className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 font-bold text-xs transition cursor-pointer shadow-2xs"
-                          >
-                            <UserCheck className="w-3.5 h-3.5 text-slate-500" />
-                            <span>{isClassTeacher ? "Reassign Cohort" : "Assign Cohort"}</span>
                           </button>
 
                           <button
@@ -844,10 +834,20 @@ export default function FacultyManagementPage() {
                   onChange={(e) => setAddForm({ ...addForm, department: e.target.value })}
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2"
                 >
-                  <option value="Computer Science & Engineering">Computer Science & Engineering</option>
-                  <option value="Electronics & Communication">Electronics & Communication</option>
-                  <option value="Mechanical Engineering">Mechanical Engineering</option>
-                  <option value="Information Science & Engineering">Information Science & Engineering</option>
+                  {coursesList.length > 0 ? (
+                    coursesList.map((c) => (
+                      <option key={c.id} value={c.name}>
+                        {c.name} {c.code ? `(${c.code})` : ""}
+                      </option>
+                    ))
+                  ) : (
+                    <>
+                      <option value="Computer Science & Engineering">Computer Science & Engineering (CSE)</option>
+                      <option value="Information Science & Engineering">Information Science & Engineering (ISE)</option>
+                      <option value="Electronics & Communication">Electronics & Communication (ECE)</option>
+                      <option value="Electrical & Electronics">Electrical & Electronics (EEE)</option>
+                    </>
+                  )}
                 </select>
               </div>
 

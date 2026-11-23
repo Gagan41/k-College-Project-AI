@@ -21,26 +21,7 @@ def list_cameras(
     current_user: User = Depends(get_current_user)
 ):
     """List all registered CCTV / IP camera streams."""
-    cameras = db.query(Camera).order_by(Camera.id.asc()).all()
-    # If no cameras exist, seed a default demo classroom camera
-    if not cameras:
-        default_cam = Camera(
-            name="Classroom 302 Main Overhead CCTV",
-            stream_url="demo",
-            camera_type="RTSP",
-            classroom="Room 302",
-            crossing_direction=CrossingDirection.LEFT_TO_RIGHT_ENTRY.value,
-            fps=25,
-            resolution="1920x1080",
-            is_active=True,
-            last_status=CameraStatus.ONLINE.value,
-            last_ping=datetime.now(timezone.utc)
-        )
-        db.add(default_cam)
-        db.commit()
-        db.refresh(default_cam)
-        cameras = [default_cam]
-    return cameras
+    return db.query(Camera).order_by(Camera.id.asc()).all()
 
 @router.post("/cameras", response_model=CameraResponse, status_code=status.HTTP_201_CREATED)
 def create_camera(
@@ -52,14 +33,12 @@ def create_camera(
     # Ensure classroom facility exists in academic records
     if cam_in.classroom and cam_in.classroom.strip():
         room_name = cam_in.classroom.strip()
-        existing_room = db.query(Classroom).filter(Classroom.room_number == room_name).first()
+        existing_room = db.query(Classroom).filter(Classroom.name == room_name).first()
         if not existing_room:
             new_room = Classroom(
-                room_number=room_name,
+                name=room_name,
                 building="Main Academic Complex",
-                floor=1,
                 capacity=60,
-                room_type="Smart Classroom",
                 is_active=True
             )
             db.add(new_room)
@@ -108,14 +87,12 @@ def update_camera(
     update_data = cam_in.model_dump(exclude_unset=True)
     if "classroom" in update_data and update_data["classroom"]:
         room_name = update_data["classroom"].strip()
-        existing_room = db.query(Classroom).filter(Classroom.room_number == room_name).first()
+        existing_room = db.query(Classroom).filter(Classroom.name == room_name).first()
         if not existing_room:
             new_room = Classroom(
-                room_number=room_name,
+                name=room_name,
                 building="Main Academic Complex",
-                floor=1,
                 capacity=60,
-                room_type="Smart Classroom",
                 is_active=True
             )
             db.add(new_room)
@@ -192,12 +169,13 @@ def get_camera_snapshot(
     camera_id: int,
     db: Session = Depends(get_db)
 ):
-    """Capture a single JPEG snapshot frame from the camera."""
+    """Capture a single JPEG snapshot frame from the camera (live RTSP or synthetic fallback)."""
     camera = db.query(Camera).filter(Camera.id == camera_id).first()
     if not camera:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Camera not found")
 
-    frame = cctv_manager.generate_synthetic_frame(camera.name, camera.classroom, camera.crossing_direction)
+    is_live, frame = cctv_manager.capture_frame(camera)
+    frame = cctv_manager.apply_stream_overlay(frame, camera)
     ret, buffer = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
     if not ret:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to encode frame")

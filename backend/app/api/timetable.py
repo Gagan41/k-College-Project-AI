@@ -75,16 +75,70 @@ def list_timetable(
             target_section = faculty_profile.class_teacher_section
 
     if target_section and target_section != "ALL":
-        query = query.filter(Timetable.section == target_section)
+        clean_sec = target_section.replace("Class:", "").replace("Section", "").replace("Sec", "").replace("(", "").replace(")", "").strip()
+        from sqlalchemy import or_
+        sec_conds = [
+            Timetable.section == target_section,
+            Timetable.section.ilike(f"%{target_section}%"),
+        ]
+        if clean_sec:
+            sec_conds.extend([
+                Timetable.section == clean_sec,
+                Timetable.section.ilike(f"%{clean_sec}%")
+            ])
+        query = query.filter(or_(*sec_conds))
 
     if semester and semester > 0:
         query = query.filter(Subject.semester == semester)
 
     if course and course != "ALL":
-        query = query.filter(
-            (Subject.department.ilike(f"%{course}%")) |
-            (Timetable.section.ilike(f"%{course}%"))
-        )
+        from sqlalchemy import or_
+        from app.models.academic import Course, CourseSection
+        course_clean = course.strip()
+        upper_c = course_clean.upper()
+
+        # Build alias dictionary for department and subject acronyms
+        aliases = [course_clean]
+        if upper_c in ["CSE", "CS"]:
+            aliases.extend(["Computer", "Science", "Engineering", "CS"])
+        elif upper_c in ["ECE", "EC"]:
+            aliases.extend(["Electronics", "Communication", "EC"])
+        elif upper_c in ["ME", "MECH"]:
+            aliases.extend(["Mechanical", "ME"])
+        elif upper_c in ["ISE", "IS", "IT"]:
+            aliases.extend(["Information", "IT", "IS"])
+        elif upper_c in ["AIML", "AI"]:
+            aliases.extend(["Artificial", "Intelligence", "AI"])
+        elif upper_c in ["CE", "CIVIL"]:
+            aliases.extend(["Civil", "CE"])
+
+        matched_course = db.query(Course).filter(
+            (Course.code.ilike(course_clean)) | (Course.name.ilike(f"%{course_clean}%"))
+        ).first()
+        if matched_course:
+            if matched_course.code:
+                aliases.append(matched_course.code)
+            if matched_course.name:
+                aliases.append(matched_course.name)
+
+        sec_names = [
+            r[0] for r in db.query(CourseSection.name).filter(
+                (CourseSection.course_code.ilike(course_clean)) | (CourseSection.name.ilike(f"%{course_clean}%"))
+            ).all()
+        ]
+
+        conditions = [
+            Subject.department.ilike(f"%{course_clean}%"),
+            Timetable.section.ilike(f"%{course_clean}%"),
+            Subject.code.ilike(f"{course_clean[:2]}%")
+        ]
+        for a in aliases:
+            conditions.append(Subject.department.ilike(f"%{a}%"))
+            conditions.append(Subject.code.ilike(f"%{a}%"))
+        if sec_names:
+            conditions.append(Timetable.section.in_(sec_names))
+
+        query = query.filter(or_(*conditions))
 
     if view_mode == "taught_by_me" and faculty_profile:
         query = query.filter(Timetable.faculty_id == faculty_profile.id)
@@ -730,10 +784,25 @@ def take_period_attendance(
         db.commit()
         db.refresh(session)
 
-    # Decode camera frame
-    frame = decode_base64_image(req.image_base64)
+    # Decode camera frame (from base64 or capture live from CCTV camera)
+    frame = None
+    if req.image_base64:
+        frame = decode_base64_image(req.image_base64)
+    elif req.camera_id:
+        cam = db.query(Camera).filter(Camera.id == req.camera_id, Camera.is_active == True).first()
+        if cam:
+            from app.services.cctv_service import cctv_manager
+            _, frame = cctv_manager.capture_frame(cam)
+    
     if frame is None:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid frame image")
+        # Fallback to classroom camera
+        cam = db.query(Camera).filter(Camera.classroom == timetable.classroom, Camera.is_active == True).first()
+        if cam:
+            from app.services.cctv_service import cctv_manager
+            _, frame = cctv_manager.capture_frame(cam)
+
+    if frame is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Could not acquire camera frame from stream or image payload")
 
     # Enrolled students for this subject
     enrolled_students = (
@@ -1547,7 +1616,7 @@ def scan_teacher_cctv_attendance(
             cam = db.query(Camera).filter(Camera.is_active == True).first()
         if cam:
             from app.services.cctv_service import cctv_manager
-            frame = cctv_manager.generate_synthetic_frame(cam.name, cam.classroom, cam.crossing_direction)
+            _, frame = cctv_manager.capture_frame(cam)
 
     if frame is None:
         raise HTTPException(400, "Could not acquire CCTV camera frame for this classroom.")

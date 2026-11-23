@@ -361,6 +361,41 @@ def create_faculty(
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to create faculty: {exc}")
 
+@router.put("/faculty/{faculty_id}", response_model=FacultyResponse, summary="Update Faculty Details")
+def update_faculty(
+    faculty_id: int,
+    payload: FacultyUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """Update faculty academic profile and linked user details."""
+    faculty = db.query(Faculty).filter(Faculty.id == faculty_id).first()
+    if not faculty:
+        raise HTTPException(status_code=404, detail="Faculty member not found.")
+
+    if payload.department is not None:
+        faculty.department = payload.department
+    if payload.designation is not None:
+        faculty.designation = payload.designation
+    if payload.office_location is not None:
+        faculty.office_location = payload.office_location
+    if payload.is_class_teacher is not None:
+        faculty.is_class_teacher = payload.is_class_teacher
+    if payload.class_teacher_section is not None:
+        faculty.class_teacher_section = payload.class_teacher_section.upper() if payload.class_teacher_section else None
+    if payload.class_teacher_semester is not None:
+        faculty.class_teacher_semester = payload.class_teacher_semester
+
+    if faculty.user:
+        if payload.full_name is not None:
+            faculty.user.full_name = payload.full_name
+        if payload.phone_number is not None:
+            faculty.user.phone_number = payload.phone_number
+
+    db.commit()
+    db.refresh(faculty)
+    return faculty
+
 @router.delete("/faculty/{faculty_id}", summary="Delete Faculty")
 def delete_faculty(
     faculty_id: int,
@@ -508,15 +543,19 @@ def create_subject(
     current_user: User = Depends(require_admin),
 ):
     """Create a new academic subject / course."""
-    if db.query(Subject).filter(Subject.code == payload.code.upper()).first():
-        raise HTTPException(status_code=400, detail=f"Subject code '{payload.code}' already exists.")
+    s_code = (payload.code or payload.subject_code or "").strip().upper()
+    s_name = (payload.name or payload.subject_name or "").strip()
+    if not s_code or not s_name:
+        raise HTTPException(status_code=400, detail="Subject Code and Subject Name are required.")
+    if db.query(Subject).filter(Subject.code == s_code).first():
+        raise HTTPException(status_code=400, detail=f"Subject code '{s_code}' already exists.")
         
     new_sub = Subject(
-        code=payload.code.upper(),
-        name=payload.name,
-        department=payload.department,
-        semester=payload.semester,
-        credits=payload.credits,
+        code=s_code,
+        name=s_name,
+        department=payload.department or "General",
+        semester=payload.semester or 1,
+        credits=payload.credits or 3,
         faculty_id=payload.faculty_id,
     )
     db.add(new_sub)
@@ -690,12 +729,16 @@ def create_course(
     current_user: User = Depends(require_admin),
 ):
     """Create a new academic course or department."""
-    existing = db.query(Course).filter(Course.code == payload.code.upper()).first()
+    c_code = (payload.code or payload.course_code or "").strip().upper()
+    c_name = (payload.name or payload.course_name or "").strip()
+    if not c_code or not c_name:
+        raise HTTPException(status_code=400, detail="Course Code and Course Name are required.")
+    existing = db.query(Course).filter(Course.code == c_code).first()
     if existing:
-        raise HTTPException(status_code=400, detail=f"Course code '{payload.code.upper()}' already exists.")
+        raise HTTPException(status_code=400, detail=f"Course code '{c_code}' already exists.")
     new_c = Course(
-        code=payload.code.upper(),
-        name=payload.name,
+        code=c_code,
+        name=c_name,
         description=payload.description,
         is_active=payload.is_active,
     )
@@ -807,13 +850,17 @@ def create_classroom(
     current_user: User = Depends(require_admin),
 ):
     """Create a new physical classroom location."""
-    existing = db.query(Classroom).filter(Classroom.name == payload.name).first()
+    room_name = (payload.name or payload.room_number or "").strip()
+    if not room_name:
+        raise HTTPException(status_code=400, detail="Classroom name or room number is required.")
+
+    existing = db.query(Classroom).filter(Classroom.name == room_name).first()
     if existing:
-        raise HTTPException(status_code=400, detail=f"Classroom '{payload.name}' already exists.")
+        raise HTTPException(status_code=400, detail=f"Classroom '{room_name}' already exists.")
     room = Classroom(
-        name=payload.name,
-        building=payload.building,
-        capacity=payload.capacity,
+        name=room_name,
+        building=payload.building or "Main Academic Block",
+        capacity=payload.capacity or 60,
         is_active=payload.is_active,
     )
     db.add(room)
@@ -822,6 +869,7 @@ def create_classroom(
     return ClassroomResponse(
         id=room.id,
         name=room.name,
+        room_number=room.name,
         building=room.building,
         capacity=room.capacity,
         is_active=room.is_active,
@@ -864,13 +912,15 @@ def delete_classroom(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_admin),
 ):
-    """Permanently deletes classroom and unbinds associated cameras."""
+    """Permanently deletes classroom and unbinds associated cameras and timetable slots."""
     room = db.query(Classroom).filter(Classroom.id == classroom_id).first()
     if not room:
         raise HTTPException(status_code=404, detail="Classroom not found.")
     
     from app.models.cctv import Camera
-    db.query(Camera).filter(Camera.classroom == room.name).update({"classroom": None}, synchronize_session=False)
+    from app.models.timetable import Timetable
+    db.query(Camera).filter(Camera.classroom == room.name).update({"classroom": "Unassigned"}, synchronize_session=False)
+    db.query(Timetable).filter(Timetable.classroom == room.name).update({"classroom": "Unassigned"}, synchronize_session=False)
     
     db.delete(room)
     db.commit()
@@ -987,19 +1037,8 @@ def get_admin_overview(
     from app.models.cctv import Camera
     from app.models.timetable import Timetable, ClassSession, AttendanceRecord
 
-    # All distinct departments for the course selector
-    student_depts = [r[0] for r in db.query(Student.department).distinct().all() if r[0]]
-    faculty_depts = [r[0] for r in db.query(Faculty.department).distinct().all() if r[0]]
-    course_records = [c.name for c in db.query(Course).filter(Course.is_active == True).all()]
-    all_depts = sorted(list(set(student_depts + faculty_depts + course_records)))
-    if not all_depts:
-        all_depts = [
-            "Computer Science & Engineering",
-            "Electronics & Communication",
-            "Mechanical Engineering",
-            "Artificial Intelligence & Machine Learning",
-            "Information Science & Engineering"
-        ]
+    # All distinct departments/courses for the course selector - strictly active courses created in academic management
+    all_depts = sorted(list(set(c.name for c in db.query(Course).filter(Course.is_active == True).all() if c.name)))
 
     # Query base filters
     stu_q = db.query(Student)
@@ -1007,6 +1046,7 @@ def get_admin_overview(
     sub_q = db.query(Subject)
 
     is_filtered = department and department.strip() and department != "All Courses" and department != "ALL"
+    filtered_student_ids = []
     if is_filtered:
         dept_clean = department.strip()
         stu_q = stu_q.filter(
@@ -1018,6 +1058,7 @@ def get_admin_overview(
         sub_q = sub_q.filter(
             (Subject.department == dept_clean) | (Subject.department.ilike(f"%{dept_clean}%"))
         )
+        filtered_student_ids = [s.id for s in stu_q.all()]
 
     total_students = stu_q.count()
     total_faculty = fac_q.count()
@@ -1027,27 +1068,230 @@ def get_admin_overview(
     enrolled_faces = stu_q.filter(Student.biometric_enrolled == True).count()
 
     classrooms = sorted(list(set(r[0] for r in db.query(Classroom.name).filter(Classroom.is_active == True).all())))
-    if not classrooms:
-        classrooms = sorted(list(set(r[0] for r in db.query(Timetable.classroom).distinct().all() if r[0])))
-    if not classrooms:
-        classrooms = ["Room 301", "Room 302", "Room 303", "Lab 1", "Lab 2"]
 
     total_timetable_slots = db.query(Timetable).filter(Timetable.is_active == True).count()
 
     today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     today_records_q = db.query(AttendanceRecord).filter(AttendanceRecord.date == today_str)
-    if is_filtered:
-        filtered_student_ids = [s.id for s in stu_q.all()]
+    all_records_q = db.query(AttendanceRecord)
+    if is_filtered and filtered_student_ids:
         today_records_q = today_records_q.filter(AttendanceRecord.student_id.in_(filtered_student_ids))
+        all_records_q = all_records_q.filter(AttendanceRecord.student_id.in_(filtered_student_ids))
+
     today_records = today_records_q.all()
+    all_records = all_records_q.all()
 
     if today_records:
-        present_cnt = sum(1 for r in today_records if r.status == "PRESENT")
-        attendance_rate = round((present_cnt / len(today_records)) * 100, 1)
-        present_today = present_cnt
+        present_today = sum(1 for r in today_records if r.status == "PRESENT")
+        attendance_rate = round((present_today / len(today_records)) * 100, 1)
+    elif all_records:
+        present_today = 0
+        overall_present = sum(1 for r in all_records if r.status == "PRESENT")
+        attendance_rate = round((overall_present / len(all_records)) * 100, 1)
     else:
-        attendance_rate = 91.8
-        present_today = max(1, int(total_students * 0.918)) if total_students > 0 else 0
+        present_today = 0
+        attendance_rate = 0.0
+
+    # --------------------------------------------------------------------------
+    # REAL DYNAMIC TELEMETRY MATRIX FOR CHARTS (TODAY, WEEKLY, MONTHLY)
+    # --------------------------------------------------------------------------
+    # Compute Today period distribution (Periods 1 to 6)
+    period_labels = ["P1 (9AM)", "P2 (10AM)", "P3 (11AM)", "P4 (1PM)", "P5 (2PM)", "P6 (3PM)"]
+    period_names = [
+        "Period 1 (09:00 AM) • Morning Opening Lecture",
+        "Period 2 (10:00 AM) • Department Specializations & Labs",
+        "Period 3 (11:15 AM) • Mid-Day Core Theory Sessions",
+        "Period 4 (01:00 PM) • Post-Lunch Academic Sessions",
+        "Period 5 (02:00 PM) • Practical & Laboratory Workstations",
+        "Period 6 (03:00 PM) • Technical Seminars & Project Labs",
+    ]
+
+    records_pool = today_records if today_records else all_records
+
+    today_present_y = []
+    today_ingests_y = []
+    today_late_y = []
+    today_raw_present = []
+    today_raw_ingests = []
+    today_raw_late = []
+
+    for p in range(1, 7):
+        p_recs = [r for r in records_pool if r.period_number == p]
+        if p_recs:
+            p_pres = sum(1 for r in p_recs if r.status == "PRESENT")
+            p_ingests = sum(1 for r in p_recs if "FACE" in str(r.verification_method).upper())
+            p_late = sum(1 for r in p_recs if r.status != "PRESENT")
+            p_rate = (p_pres / len(p_recs)) * 100.0
+            # Scale for 160px SVG: y from 30 (100%) to 145 (0%)
+            y_pres = max(25, min(145, int(145 - (p_rate / 100.0) * 115)))
+            y_ing = max(25, min(145, int(145 - (min(p_ingests, total_students or 1) / max(total_students or 1, len(p_recs))) * 115)))
+            y_late = max(25, min(145, int(145 - (p_late / max(len(p_recs), 1)) * 115)))
+            today_present_y.append(y_pres)
+            today_ingests_y.append(y_ing)
+            today_late_y.append(y_late)
+            today_raw_present.append(f"{round(p_rate, 1)}% Present ({p_pres} Students)")
+            today_raw_ingests.append(f"{p_ingests} Face CCTV Ingests")
+            today_raw_late.append(f"{p_late} Absent / Late")
+        else:
+            today_present_y.append(145)
+            today_ingests_y.append(145)
+            today_late_y.append(145)
+            today_raw_present.append("No Sessions Recorded")
+            today_raw_ingests.append("0 CCTV Ingests")
+            today_raw_late.append("0 Absent / Late")
+
+    # Weekly distribution (Mon - Sat)
+    week_days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+    weekly_present_y = []
+    weekly_ingests_y = []
+    weekly_late_y = []
+    weekly_raw_present = []
+    weekly_raw_ingests = []
+    weekly_raw_late = []
+
+    for d_idx, day_name in enumerate(["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]):
+        day_recs = [
+            r for r in all_records
+            if datetime.strptime(r.date, "%Y-%m-%d").strftime("%A").lower() == day_name.lower()
+        ] if all_records else []
+        if day_recs:
+            d_pres = sum(1 for r in day_recs if r.status == "PRESENT")
+            d_ing = sum(1 for r in day_recs if "FACE" in str(r.verification_method).upper())
+            d_late = sum(1 for r in day_recs if r.status != "PRESENT")
+            d_rate = (d_pres / len(day_recs)) * 100.0
+            weekly_present_y.append(max(25, min(145, int(145 - (d_rate / 100.0) * 115))))
+            weekly_ingests_y.append(max(25, min(145, int(145 - (min(d_ing, total_students or 1) / max(total_students or 1, len(day_recs))) * 115))))
+            weekly_late_y.append(max(25, min(145, int(145 - (d_late / max(len(day_recs), 1)) * 115))))
+            weekly_raw_present.append(f"{round(d_rate, 1)}% Avg Attendance")
+            weekly_raw_ingests.append(f"{d_ing} Total Ingests")
+            weekly_raw_late.append(f"{d_late} Absences")
+        else:
+            weekly_present_y.append(145)
+            weekly_ingests_y.append(145)
+            weekly_late_y.append(145)
+            weekly_raw_present.append("No Data Scheduled")
+            weekly_raw_ingests.append("0 Ingests")
+            weekly_raw_late.append("0 Absences")
+
+    # Monthly distribution (Week 1 to 4)
+    monthly_labels = ["Week 1", "Week 2", "Week 3", "Week 4"]
+    monthly_present_y = []
+    monthly_ingests_y = []
+    monthly_late_y = []
+    monthly_raw_present = []
+    monthly_raw_ingests = []
+    monthly_raw_late = []
+
+    for w_idx, (start_d, end_d) in enumerate([(1, 7), (8, 14), (15, 21), (22, 31)]):
+        w_recs = [
+            r for r in all_records
+            if start_d <= datetime.strptime(r.date, "%Y-%m-%d").day <= end_d
+        ] if all_records else []
+        if w_recs:
+            w_pres = sum(1 for r in w_recs if r.status == "PRESENT")
+            w_ing = sum(1 for r in w_recs if "FACE" in str(r.verification_method).upper())
+            w_late = sum(1 for r in w_recs if r.status != "PRESENT")
+            w_rate = (w_pres / len(w_recs)) * 100.0
+            monthly_present_y.append(max(25, min(145, int(145 - (w_rate / 100.0) * 115))))
+            monthly_ingests_y.append(max(25, min(145, int(145 - (min(w_ing, total_students or 1) / max(total_students or 1, len(w_recs))) * 115))))
+            monthly_late_y.append(max(25, min(145, int(145 - (w_late / max(len(w_recs), 1)) * 115))))
+            monthly_raw_present.append(f"{round(w_rate, 1)}% Weekly Average")
+            monthly_raw_ingests.append(f"{w_ing} Face Ingests")
+            monthly_raw_late.append(f"{w_late} Shortages/Absences")
+        else:
+            monthly_present_y.append(145)
+            monthly_ingests_y.append(145)
+            monthly_late_y.append(145)
+            monthly_raw_present.append("No Records")
+            monthly_raw_ingests.append("0 Ingests")
+            monthly_raw_late.append("0 Absences")
+
+    # Real verification modes breakdown
+    face_count = sum(1 for r in all_records if "FACE" in str(r.verification_method).upper())
+    card_count = sum(1 for r in all_records if "CARD" in str(r.verification_method).upper() or "BARCODE" in str(r.verification_method).upper())
+    manual_count = sum(1 for r in all_records if "MANUAL" in str(r.verification_method).upper())
+    v_total = face_count + card_count + manual_count
+
+    if v_total > 0:
+        face_pct = round((face_count / v_total) * 100)
+        card_pct = round((card_count / v_total) * 100)
+        manual_pct = max(0, 100 - face_pct - card_pct)
+    else:
+        face_pct, card_pct, manual_pct = 100, 0, 0
+
+    verification_breakdown = [
+        {
+            "id": "biometric",
+            "name": "Automated CCTV Face Recognition",
+            "value": f"{face_pct}%",
+            "numeric": face_pct,
+            "percent": round(face_pct / 100.0, 2),
+            "color": "#10b981",
+            "description": f"Passive AI camera detection ({face_count} verified logs)",
+        },
+        {
+            "id": "barcode",
+            "name": "Campus Gateway & Kiosk Scanners",
+            "value": f"{card_pct}%",
+            "numeric": card_pct,
+            "percent": round(card_pct / 100.0, 2),
+            "color": "#2563eb",
+            "description": f"Library & gate smart card terminals ({card_count} logs)",
+        },
+        {
+            "id": "manual",
+            "name": "Faculty Administrative Override",
+            "value": f"{manual_pct}%",
+            "numeric": manual_pct,
+            "percent": round(manual_pct / 100.0, 2),
+            "color": "#f59e0b",
+            "description": f"Authorized duty & leave exemptions ({manual_count} logs)",
+        },
+    ]
+
+    chart_data = {
+        "Today": {
+            "labels": period_labels,
+            "periodNames": period_names,
+            "present": today_present_y,
+            "ingests": today_ingests_y,
+            "late": today_late_y,
+            "rawValues": {
+                "present": today_raw_present,
+                "ingests": today_raw_ingests,
+                "late": today_raw_late,
+            },
+        },
+        "Weekly": {
+            "labels": week_days,
+            "periodNames": [f"{d} (Institutional Schedule)" for d in ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]],
+            "present": weekly_present_y,
+            "ingests": weekly_ingests_y,
+            "late": weekly_late_y,
+            "rawValues": {
+                "present": weekly_raw_present,
+                "ingests": weekly_raw_ingests,
+                "late": weekly_raw_late,
+            },
+        },
+        "Monthly": {
+            "labels": monthly_labels,
+            "periodNames": [
+                "Week 1 (Academic Term Opening)",
+                "Week 2 (Full Timetable Schedule)",
+                "Week 3 (Mid-Term Assessments & Practical Ingests)",
+                "Week 4 (Departmental Attendance Audits)",
+            ],
+            "present": monthly_present_y,
+            "ingests": monthly_ingests_y,
+            "late": monthly_late_y,
+            "rawValues": {
+                "present": monthly_raw_present,
+                "ingests": monthly_raw_ingests,
+                "late": monthly_raw_late,
+            },
+        },
+    }
 
     return {
         "institution_name": "University Institute of Technology & Engineering",
@@ -1066,6 +1310,8 @@ def get_admin_overview(
         "pending_biometric_students": max(0, total_students - enrolled_faces),
         "attendance_rate": attendance_rate,
         "present_today": present_today,
+        "chart_data": chart_data,
+        "verification_breakdown": verification_breakdown,
     }
 
 # ==============================================================================

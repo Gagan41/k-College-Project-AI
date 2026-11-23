@@ -411,7 +411,7 @@ export default function ClassroomPage() {
                   {monitored?.department} • Sem {monitored?.semester} (Sec {selectedSection})
                 </span>
                 <span className="px-3 py-0.5 rounded-xl bg-blue-100 border border-blue-200 text-xs font-mono font-bold text-blue-700">
-                  {monitored?.classroom || "Room 302"}
+                  {monitored?.classroom || "Unassigned"}
                 </span>
               </h1>
               <p className="text-xs md:text-sm text-slate-600 max-w-2xl mt-1 leading-relaxed">
@@ -425,12 +425,12 @@ export default function ClassroomPage() {
                 <GraduationCap className="w-4 h-4 text-blue-600" />
                 <span>
                   <strong className="text-slate-900">Class Teacher:</strong>{" "}
-                  {monitored?.class_teacher_name || "Prof. Alan Turing"}
+                  {monitored?.class_teacher_name || "Not Assigned"}
                 </span>
               </div>
               <div className="flex items-center gap-2 bg-white border border-slate-200 px-3.5 py-1.5 rounded-xl shadow-2xs">
                 <Mail className="w-3.5 h-3.5 text-slate-400" />
-                <span className="font-mono text-slate-700">{monitored?.class_teacher_email || "faculty@attendance.edu"}</span>
+                <span className="font-mono text-slate-700">{monitored?.class_teacher_email || "N/A"}</span>
               </div>
               <div className="flex items-center gap-2 bg-white border border-slate-200 px-3.5 py-1.5 rounded-xl shadow-2xs">
                 <Building className="w-3.5 h-3.5 text-slate-400" />
@@ -1141,7 +1141,7 @@ export default function ClassroomPage() {
               </div>
             </div>
             <span className="text-[11px] text-slate-400 font-medium">
-              Attendance sessions auto-sync with Room 302 High-Angle CCTV
+              Attendance sessions auto-sync with registered classroom CCTV nodes
             </span>
           </div>
         </div>

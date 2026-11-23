@@ -1,13 +1,13 @@
 from datetime import datetime
 from typing import Optional, List
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 from app.schemas.user import UserResponse
 
 # ----------------- STUDENT SCHEMAS -----------------
 class StudentBase(BaseModel):
     student_id: str
-    department: str
-    batch_year: str
+    department: Optional[str] = "General"
+    batch_year: Optional[str] = "2023-2027"
     semester: int = 1
     section: str = "A"
     photo_url: Optional[str] = None
@@ -89,12 +89,26 @@ class FacultyAssignSubjectRequest(BaseModel):
 
 # ----------------- SUBJECT SCHEMAS -----------------
 class SubjectBase(BaseModel):
-    code: str
-    name: str
-    department: str
+    code: Optional[str] = None
+    subject_code: Optional[str] = None
+    name: Optional[str] = None
+    subject_name: Optional[str] = None
+    department: Optional[str] = "General"
     semester: int = 1
     credits: int = 3
     faculty_id: Optional[int] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def populate_subject_aliases(cls, values):
+        if isinstance(values, dict):
+            s_code = values.get("code") or values.get("subject_code")
+            s_name = values.get("name") or values.get("subject_name")
+            values["code"] = s_code
+            values["subject_code"] = s_code
+            values["name"] = s_name
+            values["subject_name"] = s_name
+        return values
 
 class SubjectCreate(SubjectBase):
     pass
@@ -112,6 +126,27 @@ class SubjectResponse(SubjectBase):
     id: int
     created_at: datetime
     updated_at: datetime
+
+    @model_validator(mode="before")
+    @classmethod
+    def populate_response_aliases(cls, values):
+        if hasattr(values, "code"):
+            s_code = getattr(values, "code")
+            s_name = getattr(values, "name")
+            return {
+                "id": getattr(values, "id"),
+                "code": s_code,
+                "subject_code": s_code,
+                "name": s_name,
+                "subject_name": s_name,
+                "department": getattr(values, "department", "General"),
+                "semester": getattr(values, "semester", 1),
+                "credits": getattr(values, "credits", 3),
+                "faculty_id": getattr(values, "faculty_id", None),
+                "created_at": getattr(values, "created_at"),
+                "updated_at": getattr(values, "updated_at"),
+            }
+        return values
     faculty: Optional[FacultyResponse] = None
 
 # ----------------- ENROLLMENT SCHEMAS -----------------
@@ -216,16 +251,36 @@ class ClassroomAddStudentRequest(BaseModel):
 
 # ----------------- COURSE & DEPARTMENT SCHEMAS -----------------
 class CourseBase(BaseModel):
-    code: str
-    name: str
+    code: Optional[str] = None
+    course_code: Optional[str] = None
+    name: Optional[str] = None
+    course_name: Optional[str] = None
+    department: Optional[str] = None
+    degree_level: Optional[str] = "B.Tech"
+    total_semesters: Optional[int] = 8
     description: Optional[str] = None
     is_active: bool = True
+
+    @model_validator(mode="before")
+    @classmethod
+    def populate_code_and_name(cls, values):
+        if isinstance(values, dict):
+            c_code = values.get("code") or values.get("course_code")
+            c_name = values.get("name") or values.get("course_name")
+            values["code"] = c_code
+            values["course_code"] = c_code
+            values["name"] = c_name
+            values["course_name"] = c_name
+        return values
 
 class CourseCreate(CourseBase):
     pass
 
 class CourseUpdate(BaseModel):
+    code: Optional[str] = None
+    course_code: Optional[str] = None
     name: Optional[str] = None
+    course_name: Optional[str] = None
     description: Optional[str] = None
     is_active: Optional[bool] = None
 
@@ -239,17 +294,48 @@ class CourseResponse(CourseBase):
     faculty_count: Optional[int] = 0
     subject_count: Optional[int] = 0
 
+    @model_validator(mode="before")
+    @classmethod
+    def populate_response_aliases(cls, values):
+        if hasattr(values, "code"):
+            c_code = getattr(values, "code")
+            c_name = getattr(values, "name")
+            return {
+                "id": getattr(values, "id"),
+                "code": c_code,
+                "course_code": c_code,
+                "name": c_name,
+                "course_name": c_name,
+                "description": getattr(values, "description", None),
+                "is_active": getattr(values, "is_active", True),
+                "created_at": getattr(values, "created_at"),
+                "updated_at": getattr(values, "updated_at"),
+            }
+        return values
+
 # ----------------- CLASSROOM LOCATION SCHEMAS -----------------
 class ClassroomBase(BaseModel):
-    name: str
+    name: Optional[str] = None
+    room_number: Optional[str] = None
     building: str = "Main Academic Block"
     capacity: int = 60
     is_active: bool = True
+
+    @model_validator(mode="before")
+    @classmethod
+    def populate_name_and_room_number(cls, values):
+        if isinstance(values, dict):
+            val = values.get("name") or values.get("room_number")
+            values["name"] = val
+            values["room_number"] = val
+        return values
 
 class ClassroomCreate(ClassroomBase):
     pass
 
 class ClassroomUpdate(BaseModel):
+    name: Optional[str] = None
+    room_number: Optional[str] = None
     building: Optional[str] = None
     capacity: Optional[int] = None
     is_active: Optional[bool] = None
@@ -262,6 +348,25 @@ class ClassroomResponse(ClassroomBase):
     updated_at: datetime
     camera_id: Optional[int] = None
     camera_name: Optional[str] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def set_room_number(cls, values):
+        if hasattr(values, "name"):
+            room_name = getattr(values, "name")
+            return {
+                "id": getattr(values, "id"),
+                "name": room_name,
+                "room_number": room_name,
+                "building": getattr(values, "building", "Main Academic Block"),
+                "capacity": getattr(values, "capacity", 60),
+                "is_active": getattr(values, "is_active", True),
+                "created_at": getattr(values, "created_at"),
+                "updated_at": getattr(values, "updated_at"),
+                "camera_id": getattr(values, "camera_id", None),
+                "camera_name": getattr(values, "camera_name", None),
+            }
+        return values
 
 # ----------------- CLASS TEACHER ASSIGNMENT SCHEMAS -----------------
 class ClassTeacherAssignRequest(BaseModel):

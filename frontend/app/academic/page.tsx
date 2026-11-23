@@ -159,12 +159,15 @@ function AcademicManagementContent() {
   const [loadingSections, setLoadingSections] = useState(false);
   const [sectionCourseFilter, setSectionCourseFilter] = useState("ALL");
   const [showSectionModal, setShowSectionModal] = useState(false);
+  const [editingSection, setEditingSection] = useState<SectionItem | null>(null);
+  const [assignedRoomForEdit, setAssignedRoomForEdit] = useState<string>("");
+  const [savingRoom, setSavingRoom] = useState(false);
   const [sectionForm, setSectionForm] = useState({
     name: "",
     course_code: "CSE",
     semester: 7,
     batch_year: "2023-2027",
-    room_number: "Room 302",
+    room_number: "",
     capacity: 60,
     is_active: true,
   });
@@ -320,20 +323,18 @@ function AcademicManagementContent() {
   };
 
   useEffect(() => {
+    // Always load core courses, sections, and classrooms so modals and forms have live DB data
+    loadCourses();
+    loadSections();
+    loadClassrooms();
+
     if (activeTab === "courses") loadCourses();
-    if (activeTab === "sections") {
-      loadSections();
-      loadCourses();
-    }
+    if (activeTab === "sections") loadSections();
     if (activeTab === "classrooms") loadClassrooms();
-    if (activeTab === "subjects") {
-      loadSubjects();
-      loadCourses();
-    }
+    if (activeTab === "subjects") loadSubjects();
     if (activeTab === "students" || activeTab === "enrollment") {
       loadStudents();
-      loadSections();
-      loadCourses();
+      loadSubjects();
     }
   }, [activeTab, token]);
 
@@ -343,16 +344,33 @@ function AcademicManagementContent() {
   const handleCreateCourse = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
+      const code = (courseForm.course_code || (courseForm as any).code || "").trim().toUpperCase();
+      const name = (courseForm.course_name || (courseForm as any).name || "").trim();
+      if (!code || !name) {
+        setBanner({ type: "error", text: "Please enter both Course Code and Course Title." });
+        return;
+      }
       const res = await fetch(`${API_BASE_URL}/academic/courses`, {
         method: "POST",
         headers: { "Content-Type": "application/json", ...getAuthHeaders(token) },
-        body: JSON.stringify(courseForm),
+        body: JSON.stringify({
+          ...courseForm,
+          code,
+          name,
+          course_code: code,
+          course_name: name,
+        }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.detail || "Failed to create course.");
+      if (!res.ok) {
+        const errDetail = Array.isArray(data.detail)
+          ? data.detail.map((e: any) => e.msg || JSON.stringify(e)).join(", ")
+          : typeof data.detail === "string" ? data.detail : "Failed to create course.";
+        throw new Error(errDetail);
+      }
       setBanner({ type: "success", text: `Course ${data.code || data.course_code} created successfully.` });
       setShowCourseModal(false);
-      setCourseForm({ course_code: "", course_name: "", department: "Computer Science & Engineering", degree_level: "B.Tech", total_semesters: 8, is_active: true });
+      setCourseForm({ course_code: "", course_name: "", department: name, degree_level: "B.Tech", total_semesters: 8, is_active: true });
       loadCourses();
     } catch (err: unknown) {
       setBanner({ type: "error", text: err instanceof Error ? err.message : "Error creating course." });
@@ -368,13 +386,42 @@ function AcademicManagementContent() {
         body: JSON.stringify(sectionForm),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.detail || "Failed to create section.");
+      if (!res.ok) {
+        const errDetail = Array.isArray(data.detail)
+          ? data.detail.map((e: any) => e.msg || JSON.stringify(e)).join(", ")
+          : typeof data.detail === "string" ? data.detail : "Failed to create section.";
+        throw new Error(errDetail);
+      }
       setBanner({ type: "success", text: `Section ${data.course_code}-${data.name} added successfully.` });
       setShowSectionModal(false);
-      setSectionForm({ name: "", course_code: "CSE", semester: 7, batch_year: "2023-2027", room_number: "Room 302", capacity: 60, is_active: true });
+      setSectionForm({ name: "", course_code: "CSE", semester: 7, batch_year: "2023-2027", room_number: "", capacity: 60, is_active: true });
       loadSections();
     } catch (err: unknown) {
       setBanner({ type: "error", text: err instanceof Error ? err.message : "Error creating section." });
+    }
+  };
+
+  const handleSaveRoomAssignment = async () => {
+    if (!editingSection) return;
+    try {
+      setSavingRoom(true);
+      const res = await fetch(`${API_BASE_URL}/academic/sections/${editingSection.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", ...getAuthHeaders(token) },
+        body: JSON.stringify({ room_number: assignedRoomForEdit || "Unassigned" }),
+      });
+      if (res.ok) {
+        setBanner({ type: "success", text: `Assigned classroom '${assignedRoomForEdit || "Unassigned"}' to ${editingSection.name}.` });
+        setEditingSection(null);
+        loadSections();
+      } else {
+        const d = await res.json();
+        setBanner({ type: "error", text: d.detail || "Failed to update room assignment." });
+      }
+    } catch (e: any) {
+      setBanner({ type: "error", text: e.message || "Failed to update room assignment." });
+    } finally {
+      setSavingRoom(false);
     }
   };
 
@@ -482,13 +529,29 @@ function AcademicManagementContent() {
   const handleCreateClassroom = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
+      const roomName = classroomForm.room_number.trim();
+      if (!roomName) {
+        setBanner({ type: "error", text: "Please enter a classroom name or room number." });
+        return;
+      }
       const res = await fetch(`${API_BASE_URL}/academic/classrooms`, {
         method: "POST",
         headers: { "Content-Type": "application/json", ...getAuthHeaders(token) },
-        body: JSON.stringify(classroomForm),
+        body: JSON.stringify({
+          ...classroomForm,
+          name: roomName,
+          room_number: roomName,
+        }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.detail || "Failed to create classroom.");
+      if (!res.ok) {
+        const errDetail = Array.isArray(data.detail)
+          ? data.detail.map((e: any) => e.msg || JSON.stringify(e)).join(", ")
+          : typeof data.detail === "string"
+          ? data.detail
+          : "Failed to create classroom.";
+        throw new Error(errDetail);
+      }
       setBanner({ type: "success", text: `Classroom ${data.room_number || data.name} created successfully.` });
       setShowClassroomModal(false);
       setClassroomForm({ room_number: "", building: "Main Academic Complex", floor: 1, capacity: 60, room_type: "Lecture Hall", is_active: true });
@@ -501,22 +564,35 @@ function AcademicManagementContent() {
   const handleCreateSubject = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
+      const code = subjectForm.code.trim().toUpperCase();
+      const name = subjectForm.name.trim();
+      if (!code || !name) {
+        setBanner({ type: "error", text: "Please enter Subject Code and Subject Name." });
+        return;
+      }
       const res = await fetch(`${API_BASE_URL}/academic/subjects`, {
         method: "POST",
         headers: { "Content-Type": "application/json", ...getAuthHeaders(token) },
         body: JSON.stringify({
-          code: subjectForm.code.toUpperCase(),
-          name: subjectForm.name,
+          code,
+          name,
+          subject_code: code,
+          subject_name: name,
           department: subjectForm.department,
-          semester: subjectForm.semester,
-          credits: subjectForm.credits,
+          semester: Number(subjectForm.semester) || 1,
+          credits: Number(subjectForm.credits) || 3,
         }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.detail || "Failed to create subject.");
-      setBanner({ type: "success", text: `Subject ${data.code} (${data.name}) created and assigned to ${data.department}.` });
+      if (!res.ok) {
+        const errDetail = Array.isArray(data.detail)
+          ? data.detail.map((e: any) => e.msg || JSON.stringify(e)).join(", ")
+          : typeof data.detail === "string" ? data.detail : "Failed to create subject.";
+        throw new Error(errDetail);
+      }
+      setBanner({ type: "success", text: `Subject ${data.code} (${data.name}) created successfully.` });
       setShowSubjectModal(false);
-      setSubjectForm({ code: "", name: "", department: "Computer Science & Engineering", course_code: "CSE", semester: 7, credits: 4 });
+      setSubjectForm({ code: "", name: "", department: availableEnrollCourses[0]?.name || "General", course_code: availableEnrollCourses[0]?.code || "", semester: 1, credits: 3 });
       loadSubjects();
     } catch (err: unknown) {
       setBanner({ type: "error", text: err instanceof Error ? err.message : "Error creating subject." });
@@ -526,16 +602,38 @@ function AcademicManagementContent() {
   const handleCreateStudent = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
+      const studentId = studentForm.student_id.trim().toUpperCase();
+      const fullName = studentForm.full_name.trim();
+      const email = studentForm.email.trim().toLowerCase();
+      if (!studentId || !fullName || !email) {
+        setBanner({ type: "error", text: "Please fill in Student ID, Full Name, and Email." });
+        return;
+      }
       const res = await fetch(`${API_BASE_URL}/academic/students`, {
         method: "POST",
         headers: { "Content-Type": "application/json", ...getAuthHeaders(token) },
-        body: JSON.stringify(studentForm),
+        body: JSON.stringify({
+          ...studentForm,
+          student_id: studentId,
+          full_name: fullName,
+          email: email,
+          department: studentForm.department || availableEnrollCourses[0]?.name || "General",
+          batch_year: studentForm.batch_year || "2023-2027",
+          semester: Number(studentForm.semester) || 1,
+          section: studentForm.section || "A",
+          password: studentForm.password || "student123",
+        }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.detail || "Failed to register student.");
+      if (!res.ok) {
+        const errDetail = Array.isArray(data.detail)
+          ? data.detail.map((e: any) => e.msg || JSON.stringify(e)).join(", ")
+          : typeof data.detail === "string" ? data.detail : "Failed to register student.";
+        throw new Error(errDetail);
+      }
       setBanner({ type: "success", text: `Student ${data.user.full_name} (${data.student_id}) enrolled.` });
       setShowStudentModal(false);
-      setStudentForm({ student_id: "", full_name: "", email: "", department: "Computer Science & Engineering", batch_year: "2023-2027", semester: 7, section: "CS2", phone_number: "", password: "student123" });
+      setStudentForm({ student_id: "", full_name: "", email: "", department: availableEnrollCourses[0]?.name || "General", batch_year: "2023-2027", semester: 1, section: "A", phone_number: "", password: "student123" });
       loadStudents();
     } catch (err: unknown) {
       setBanner({ type: "error", text: err instanceof Error ? err.message : "Error registering student." });
@@ -806,6 +904,21 @@ function AcademicManagementContent() {
       (s) => s.is_active && (s.course_code || "").trim().toUpperCase() === targetCourse
     );
   }, [sections, enrollCourseFilter]);
+
+  // Dynamic sections matching selected student form course & semester
+  const matchingSections = useMemo(() => {
+    const targetDept = (studentForm.department || "").trim().toLowerCase();
+    const targetCode = availableEnrollCourses.find(
+      (c) => c.name.toLowerCase() === targetDept || c.code.toLowerCase() === targetDept
+    )?.code?.toLowerCase();
+
+    return sections.filter((s) => {
+      const sCode = (s.course_code || "").trim().toLowerCase();
+      const codeMatches = !targetCode || sCode === targetCode;
+      const semMatches = !studentForm.semester || s.semester === studentForm.semester;
+      return s.is_active && codeMatches && semMatches;
+    });
+  }, [sections, studentForm.department, studentForm.semester, availableEnrollCourses]);
 
   const filteredEnrollStudents = useMemo(() => {
     let list = [...students];
@@ -1144,14 +1257,22 @@ function AcademicManagementContent() {
                     </p>
                   </div>
                   <div className="text-[11px] text-slate-600 border-t border-slate-100 pt-2 flex items-center justify-between">
-                    <span className="flex items-center gap-1 font-semibold text-slate-700">
+                    <button
+                      onClick={() => {
+                        setEditingSection(sec);
+                        setAssignedRoomForEdit(sec.room_number || (classrooms.length > 0 ? classrooms[0].room_number : "Unassigned"));
+                      }}
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 text-xs font-bold transition cursor-pointer"
+                      title="Assign or Change Classroom"
+                    >
                       <MapPin className="w-3.5 h-3.5 text-emerald-600" />
-                      <span>{sec.room_number || "Room 302"}</span>
-                    </span>
+                      <span>{sec.room_number && sec.room_number !== "Unassigned" ? sec.room_number : "Assign Classroom"}</span>
+                      <Edit2 className="w-3 h-3 text-emerald-600 ml-0.5" />
+                    </button>
                     <button
                       onClick={() => handleDeleteSection(sec.id)}
                       className="text-slate-400 hover:text-rose-600 p-1 rounded-lg"
-                      title="Deactivate Section"
+                      title="Permanently Delete Section"
                     >
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>
@@ -2223,13 +2344,18 @@ function AcademicManagementContent() {
               <div className="grid grid-cols-2 gap-2">
                 <div>
                   <label className="block text-slate-700 font-semibold mb-1">Assigned Room</label>
-                  <input
-                    type="text"
-                    placeholder="e.g. Room 302"
+                  <select
                     value={sectionForm.room_number}
                     onChange={(e) => setSectionForm({ ...sectionForm, room_number: e.target.value })}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2"
-                  />
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs"
+                  >
+                    <option value="">Unassigned</option>
+                    {classrooms.map((c) => (
+                      <option key={c.id} value={c.room_number}>
+                        {c.room_number} ({c.building})
+                      </option>
+                    ))}
+                  </select>
                 </div>
                 <div>
                   <label className="block text-slate-700 font-semibold mb-1">Capacity</label>
@@ -2247,6 +2373,58 @@ function AcademicManagementContent() {
                 <button type="submit" className="px-4 py-2 rounded-xl bg-blue-600 text-white font-bold">Save Section</button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* 2b. Assign Classroom to Section Modal */}
+      {editingSection && (
+        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl border border-slate-200 shadow-xl max-w-md w-full p-6 space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div>
+                <h3 className="text-sm font-bold text-slate-900">Assign Classroom</h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Class: {editingSection.name} ({editingSection.course_code} - Sem {editingSection.semester})
+                </p>
+              </div>
+              <button onClick={() => setEditingSection(null)}><X className="w-4 h-4 text-slate-400" /></button>
+            </div>
+            <div className="space-y-3 text-xs">
+              <div>
+                <label className="block text-slate-700 font-semibold mb-1">Select Physical Classroom / Hall</label>
+                <select
+                  value={assignedRoomForEdit}
+                  onChange={(e) => setAssignedRoomForEdit(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold text-slate-800"
+                >
+                  <option value="Unassigned">Unassigned</option>
+                  {classrooms.map((c) => (
+                    <option key={c.id} value={c.room_number}>
+                      {c.room_number} — {c.building || "Campus Block"} (Cap: {c.capacity})
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="pt-2 flex justify-end gap-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setEditingSection(null)}
+                  className="px-4 py-2 rounded-xl text-slate-600 hover:bg-slate-100"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveRoomAssignment}
+                  disabled={savingRoom}
+                  className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold flex items-center gap-1.5"
+                >
+                  <Check className="w-3.5 h-3.5" />
+                  <span>{savingRoom ? "Saving..." : "Save Classroom Assignment"}</span>
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}
@@ -2313,13 +2491,31 @@ function AcademicManagementContent() {
                 <label className="block text-slate-700 font-semibold mb-1">Assign to Course</label>
                 <select
                   value={subjectForm.department}
-                  onChange={(e) => setSubjectForm({ ...subjectForm, department: e.target.value })}
+                  onChange={(e) => {
+                    const selDept = e.target.value;
+                    const matched = availableEnrollCourses.find((c) => c.name === selDept || c.code === selDept);
+                    setSubjectForm({
+                      ...subjectForm,
+                      department: selDept,
+                      course_code: matched ? matched.code : subjectForm.course_code,
+                    });
+                  }}
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 font-bold"
                 >
-                  <option value="Computer Science & Engineering">Computer Science & Engineering (CSE)</option>
-                  <option value="Information Science & Engineering">Information Science & Engineering (ISE)</option>
-                  <option value="Electronics & Communication">Electronics & Communication (ECE)</option>
-                  <option value="Electrical & Electronics">Electrical & Electronics (EEE)</option>
+                  {availableEnrollCourses.length > 0 ? (
+                    availableEnrollCourses.map((c) => (
+                      <option key={c.code} value={c.name}>
+                        {c.name} ({c.code})
+                      </option>
+                    ))
+                  ) : (
+                    <>
+                      <option value="Computer Science & Engineering">Computer Science & Engineering (CSE)</option>
+                      <option value="Information Science & Engineering">Information Science & Engineering (ISE)</option>
+                      <option value="Electronics & Communication">Electronics & Communication (ECE)</option>
+                      <option value="Electrical & Electronics">Electrical & Electronics (EEE)</option>
+                    </>
+                  )}
                 </select>
               </div>
               <div className="grid grid-cols-2 gap-2">
@@ -2437,16 +2633,28 @@ function AcademicManagementContent() {
                     onChange={(e) => setStudentForm({ ...studentForm, department: e.target.value })}
                     className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2"
                   >
-                    <option value="Computer Science & Engineering">CSE</option>
-                    <option value="Information Science & Engineering">ISE</option>
-                    <option value="Electronics & Communication">ECE</option>
-                    <option value="Electrical & Electronics">EEE</option>
+                    {availableEnrollCourses.length > 0 ? (
+                      availableEnrollCourses.map((c) => (
+                        <option key={c.code} value={c.name}>
+                          {c.code} - {c.name}
+                        </option>
+                      ))
+                    ) : (
+                      <>
+                        <option value="Computer Science & Engineering">CSE - Computer Science & Engineering</option>
+                        <option value="Information Science & Engineering">ISE - Information Science & Engineering</option>
+                        <option value="Electronics & Communication">ECE - Electronics & Communication</option>
+                        <option value="Electrical & Electronics">EEE - Electrical & Electronics</option>
+                      </>
+                    )}
                   </select>
                 </div>
                 <div>
                   <label className="block text-slate-700 font-semibold mb-1">Semester</label>
                   <input
                     type="number"
+                    min={1}
+                    max={8}
                     value={studentForm.semester}
                     onChange={(e) => setStudentForm({ ...studentForm, semester: Number(e.target.value) })}
                     className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2"
@@ -2459,16 +2667,18 @@ function AcademicManagementContent() {
                     onChange={(e) => setStudentForm({ ...studentForm, section: e.target.value })}
                     className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2"
                   >
-                    {sections.length > 0 ? (
-                      sections
-                        .filter((s) => s.is_active)
-                        .map((s) => (
-                          <option key={s.id} value={s.name}>
-                            {s.course_code}-{s.name} (Sem {s.semester})
-                          </option>
-                        ))
+                    {matchingSections.length > 0 ? (
+                      matchingSections.map((s) => (
+                        <option key={s.id} value={s.name}>
+                          Section {s.name} {s.room_number ? `(${s.room_number})` : ""}
+                        </option>
+                      ))
                     ) : (
-                      <option value="A">Section A</option>
+                      <>
+                        <option value="A">Section A</option>
+                        <option value="B">Section B</option>
+                        <option value="C">Section C</option>
+                      </>
                     )}
                   </select>
                 </div>

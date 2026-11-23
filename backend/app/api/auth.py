@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from app.core.database import get_db
-from app.core.security import verify_password, create_access_token
+from app.core.security import verify_password, create_access_token, get_password_hash
 from app.core.config import settings
 from app.models.user import User, UserRole
 from app.schemas.auth import (
@@ -10,6 +10,8 @@ from app.schemas.auth import (
     LoginOtpResponse,
     SendOtpRequest,
     VerifyOtpRequest,
+    ForgotPasswordRequest,
+    ResetPasswordRequest,
 )
 from app.schemas.user import UserResponse
 from app.api.deps import get_current_user, require_admin, require_faculty_or_admin, require_roles
@@ -151,6 +153,57 @@ def logout(current_user: User = Depends(get_current_user)):
     """Acknowledge logout and log event."""
     logger.info(f"User logged out: {current_user.email}")
     return {"success": True, "message": "Successfully logged out."}
+
+@router.post("/forgot-password", summary="Request Password Reset OTP")
+def forgot_password(payload: ForgotPasswordRequest, db: Session = Depends(get_db)):
+    """Generate and dispatch password reset OTP code."""
+    email_clean = payload.email.lower().strip()
+    user = db.query(User).filter(User.email == email_clean).first()
+    if not user:
+        return {
+            "success": True,
+            "message": f"If an account exists with {email_clean}, a 6-digit password reset code has been dispatched."
+        }
+
+    otp = generate_otp(6)
+    email_sent = send_otp_email(
+        to_email=user.email,
+        otp=otp,
+        user_name=user.full_name,
+        purpose="Password Reset Verification"
+    )
+    logger.info(f"Password reset OTP generated for {user.email} (Email Sent: {email_sent})")
+    return {
+        "success": True,
+        "email": user.email,
+        "message": f"A 6-digit password reset code has been sent to {user.email}.",
+        "expires_in_minutes": settings.OTP_EXPIRE_MINUTES
+    }
+
+@router.post("/reset-password", summary="Reset Password with OTP")
+def reset_password(payload: ResetPasswordRequest, db: Session = Depends(get_db)):
+    """Verify OTP and update user password."""
+    email_clean = payload.email.lower().strip()
+    user = db.query(User).filter(User.email == email_clean).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="No user found with this email.")
+
+    is_valid = verify_otp_code(email_clean, payload.otp, purpose="Password Reset Verification")
+    if not is_valid:
+        is_valid = verify_otp_code(email_clean, payload.otp, purpose="password_reset")
+    if not is_valid:
+        raise HTTPException(status_code=400, detail="Invalid or expired reset code. Please request a new code.")
+
+    if len(payload.new_password) < 6:
+        raise HTTPException(status_code=400, detail="Password must be at least 6 characters long.")
+
+    user.hashed_password = get_password_hash(payload.new_password)
+    db.commit()
+    logger.info(f"Password reset successfully for user: {user.email}")
+    return {
+        "success": True,
+        "message": "Password reset successful! You can now log in with your new password."
+    }
 
 # Protected Role Verification Endpoints
 @router.get("/protected/admin-only", summary="Admin-only RBAC Verification")
