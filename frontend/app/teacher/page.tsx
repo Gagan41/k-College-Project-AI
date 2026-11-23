@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useMemo, Suspense } from "react";
+import React, { useState, useEffect, useMemo, useRef, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import {
   GraduationCap,
@@ -32,6 +32,10 @@ import {
   Cloud,
   ChevronRight,
   TrendingUp,
+  Eye,
+  Video,
+  Maximize2,
+  Minimize2,
 } from "lucide-react";
 import Link from "next/link";
 import { API_BASE_URL, getAuthHeaders } from "@/lib/api";
@@ -267,6 +271,36 @@ function TeacherPortalContent() {
     recognized_count: number;
     message: string;
   } | null>(null);
+
+  // Live Feed Watch & Popout Modal State
+  const [showLiveFeedModal, setShowLiveFeedModal] = useState(false);
+  const [liveFeedSource, setLiveFeedSource] = useState<"CCTV" | "WEBCAM">("CCTV");
+  const modalVideoRef = useRef<HTMLVideoElement | null>(null);
+  const [webcamActive, setWebcamActive] = useState(false);
+
+  useEffect(() => {
+    let stream: MediaStream | null = null;
+    if (showLiveFeedModal && liveFeedSource === "WEBCAM") {
+      navigator.mediaDevices?.getUserMedia({ video: { width: 1280, height: 720 } })
+        .then((s) => {
+          stream = s;
+          if (modalVideoRef.current) {
+            modalVideoRef.current.srcObject = s;
+            modalVideoRef.current.play();
+            setWebcamActive(true);
+          }
+        })
+        .catch((err) => {
+          console.error("Webcam access error:", err);
+          setWebcamActive(false);
+        });
+    }
+    return () => {
+      if (stream) {
+        stream.getTracks().forEach((t) => t.stop());
+      }
+    };
+  }, [showLiveFeedModal, liveFeedSource]);
 
   // Take Attendance from Classroom CCTV Feed via YuNet Face Detection + SFace Biometrics
   const handleScanCCTVAttendance = async () => {
@@ -589,7 +623,16 @@ function TeacherPortalContent() {
                   </div>
                 </div>
 
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowLiveFeedModal(true)}
+                    className="w-full sm:w-auto px-4 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs shadow-md shadow-slate-900/20 transition flex items-center justify-center gap-2 cursor-pointer border border-slate-700 hover:border-slate-600"
+                  >
+                    <Eye className="w-4 h-4 text-emerald-400 animate-pulse" />
+                    <span>Watch Live Feed</span>
+                  </button>
+
                   <button
                     onClick={handleScanCCTVAttendance}
                     disabled={
@@ -647,8 +690,18 @@ function TeacherPortalContent() {
                       <span>AI YUNET + SFACE DETECTOR</span>
                     </div>
 
-                    <div className="bg-black/60 backdrop-blur-md px-2.5 py-1 rounded-lg border border-white/10 text-[10px] font-mono text-slate-300">
-                      {displayedSlot.classroom} &bull; CAM-0{data?.cctv_camera?.id || 4}
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setShowLiveFeedModal(true)}
+                        className="pointer-events-auto bg-black/70 hover:bg-black/90 backdrop-blur-md px-2.5 py-1 rounded-lg border border-white/20 text-[10px] font-bold text-white flex items-center gap-1.5 transition hover:scale-105 cursor-pointer shadow-lg"
+                      >
+                        <Eye className="w-3 h-3 text-emerald-400" />
+                        <span>Watch Feed</span>
+                      </button>
+                      <div className="bg-black/60 backdrop-blur-md px-2.5 py-1 rounded-lg border border-white/10 text-[10px] font-mono text-slate-300">
+                        {displayedSlot.classroom} &bull; CAM-0{data?.cctv_camera?.id || 4}
+                      </div>
                     </div>
                   </div>
 
@@ -1041,7 +1094,7 @@ function TeacherPortalContent() {
                 <div className="pt-1 flex items-center justify-between text-xs text-slate-500">
                   <span className="flex items-center gap-1">
                     <MapPin className="w-3.5 h-3.5 text-rose-500" />
-                    <span>{sub.classroom || "Room 302"}</span>
+                    <span>{sub.classroom || "Unassigned"}</span>
                   </span>
                   <span>Section: {sub.section}</span>
                 </div>
@@ -1135,6 +1188,185 @@ function TeacherPortalContent() {
                 No classes scheduled for you today ({data?.current_day}).
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* =========================================================================
+          WATCH LIVE FEED & REAL-TIME ATTENDANCE MODAL
+      ========================================================================= */}
+      {showLiveFeedModal && displayedSlot && (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-3 sm:p-6 animate-in fade-in duration-200">
+          <div className="bg-slate-950 border border-slate-800 rounded-3xl w-full max-w-4xl max-h-[92vh] flex flex-col overflow-hidden shadow-2xl relative">
+            {/* Modal Header */}
+            <div className="p-4 sm:p-5 border-b border-slate-800 flex items-center justify-between bg-slate-900/60">
+              <div className="flex items-center gap-3">
+                <div className="p-2 rounded-xl bg-blue-500/10 text-blue-400 border border-blue-500/20">
+                  <Video className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-sm font-extrabold text-white">Classroom Live Feed</h3>
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+                      LIVE STREAM
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    {displayedSlot.classroom} &bull; Period {displayedSlot.period_number} &bull; {displayedSlot.subject_name} ({displayedSlot.subject_code})
+                  </p>
+                </div>
+              </div>
+
+              {/* Source Switcher & Close */}
+              <div className="flex items-center gap-2">
+                <div className="flex items-center bg-slate-800 p-0.5 rounded-xl border border-slate-700 text-xs">
+                  <button
+                    type="button"
+                    onClick={() => setLiveFeedSource("CCTV")}
+                    className={`px-3 py-1 rounded-lg font-bold transition cursor-pointer ${
+                      liveFeedSource === "CCTV" ? "bg-blue-600 text-white shadow-xs" : "text-slate-400 hover:text-white"
+                    }`}
+                  >
+                    Classroom CCTV
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setLiveFeedSource("WEBCAM")}
+                    className={`px-3 py-1 rounded-lg font-bold transition cursor-pointer ${
+                      liveFeedSource === "WEBCAM" ? "bg-blue-600 text-white shadow-xs" : "text-slate-400 hover:text-white"
+                    }`}
+                  >
+                    Device Webcam
+                  </button>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setShowLiveFeedModal(false)}
+                  className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition cursor-pointer"
+                  title="Close Live Feed"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+
+            {/* Video Viewport */}
+            <div className="relative flex-1 bg-black aspect-video min-h-[320px] max-h-[60vh] flex items-center justify-center overflow-hidden">
+              {liveFeedSource === "CCTV" ? (
+                data?.cctv_camera ? (
+                  <img
+                    src={`${API_BASE_URL}/cctv/cameras/${data.cctv_camera.id}/stream`}
+                    alt={data.cctv_camera.name}
+                    className="w-full h-full object-contain bg-black"
+                    onError={(e) => {
+                      (e.currentTarget as HTMLImageElement).src = `${API_BASE_URL}/cctv/cameras/${data.cctv_camera?.id}/snapshot?t=${Date.now()}`;
+                    }}
+                  />
+                ) : (
+                  <div className="text-center p-8 text-slate-500 space-y-2">
+                    <Camera className="w-12 h-12 mx-auto text-slate-600" />
+                    <p className="text-sm font-semibold text-slate-300">Connecting to Classroom Stream...</p>
+                    <p className="text-xs text-slate-500">Camera assigned to {displayedSlot.classroom}</p>
+                  </div>
+                )
+              ) : (
+                <video
+                  ref={modalVideoRef}
+                  autoPlay
+                  playsInline
+                  muted
+                  className="w-full h-full object-contain bg-black"
+                />
+              )}
+
+              {/* HUD Overlay Elements */}
+              <div className="absolute inset-0 pointer-events-none p-4 flex flex-col justify-between">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 bg-black/70 backdrop-blur-md px-3 py-1.5 rounded-xl border border-white/10 text-xs font-mono text-emerald-400">
+                    <span className="w-2.5 h-2.5 rounded-full bg-rose-500 animate-pulse" />
+                    <span className="font-bold">LIVE FEED</span>
+                    <span className="text-slate-500">|</span>
+                    <span className="text-slate-300">
+                      {liveFeedSource === "CCTV" ? data?.cctv_camera?.name || "Overhead CCTV" : "Local Device Webcam"}
+                    </span>
+                  </div>
+
+                  <div className="bg-black/70 backdrop-blur-md px-3 py-1.5 rounded-xl border border-white/10 text-xs font-mono text-slate-300">
+                    {displayedSlot.classroom} &bull; Section {displayedSlot.section}
+                  </div>
+                </div>
+
+                {/* Scanning Animation bar when scanning */}
+                {isScanningCCTV && (
+                  <div className="absolute inset-0 bg-blue-950/80 backdrop-blur-xs flex flex-col items-center justify-center gap-3">
+                    <div className="w-64 h-2 bg-blue-900 rounded-full overflow-hidden">
+                      <div className="h-full bg-blue-400 animate-pulse w-full" />
+                    </div>
+                    <div className="bg-slate-900/95 border border-blue-500/50 px-6 py-4 rounded-2xl text-center shadow-2xl">
+                      <p className="text-sm font-bold text-blue-300 flex items-center justify-center gap-2">
+                        <RotateCw className="w-5 h-5 animate-spin" />
+                        <span>Detecting Faces via YuNet & Matching 128-D SFace Vectors...</span>
+                      </p>
+                      <p className="text-xs text-slate-400 mt-1">
+                        Scanning all students in {displayedSlot.classroom} for Period {displayedSlot.period_number}
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                <div className="flex items-center justify-between text-xs font-mono text-slate-400 bg-black/70 backdrop-blur-md px-4 py-2 rounded-xl border border-white/10">
+                  <span>FACULTY: {data?.teacher?.name || "Teacher"}</span>
+                  <span className="text-blue-400 font-bold">
+                    {displayedSlot.start_time} - {displayedSlot.end_time} &bull; {displayedSlot.subject_code}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Modal Footer Controls */}
+            <div className="p-4 sm:p-5 border-t border-slate-800 bg-slate-900/70 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="text-xs text-slate-400">
+                {cctvScanResult ? (
+                  <div className="flex items-center gap-2 text-emerald-400 font-bold">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                    <span>{cctvScanResult.message} ({cctvScanResult.recognized_count} Recognized)</span>
+                  </div>
+                ) : (
+                  <span>Monitor student activity and click scan below to take instant attendance.</span>
+                )}
+              </div>
+
+              <div className="flex items-center gap-2.5">
+                <button
+                  type="button"
+                  onClick={handleScanCCTVAttendance}
+                  disabled={isScanningCCTV || (!displayedSlot.can_take_attendance && user?.role === "FACULTY")}
+                  className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-blue-600 via-indigo-600 to-blue-700 hover:from-blue-500 hover:to-indigo-600 text-white font-bold text-xs shadow-lg shadow-blue-900/40 transition disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-2 cursor-pointer border border-blue-400/40"
+                >
+                  {isScanningCCTV ? (
+                    <>
+                      <RotateCw className="w-4 h-4 animate-spin" />
+                      <span>Scanning Faces...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Camera className="w-4 h-4 text-blue-200" />
+                      <span>Take Attendance from Live Feed</span>
+                    </>
+                  )}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setShowLiveFeedModal(false)}
+                  className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white font-bold text-xs transition cursor-pointer"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

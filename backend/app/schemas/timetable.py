@@ -4,13 +4,13 @@ from datetime import datetime
 
 class TimetableBase(BaseModel):
     subject_id: int = Field(..., description="Subject database ID")
-    faculty_id: int = Field(..., description="Faculty database ID")
+    faculty_id: Optional[int] = Field(None, description="Faculty database ID")
     camera_id: Optional[int] = Field(None, description="Optional linked camera ID")
     day_of_week: str = Field(..., examples=["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"])
     period_number: int = Field(default=1, ge=1, le=8, description="Period slot 1 to 6")
     start_time: str = Field(..., examples=["09:00", "13:00", "14:00"], pattern=r"^\d{2}:\d{2}$")
     end_time: str = Field(..., examples=["10:00", "14:00", "15:00"], pattern=r"^\d{2}:\d{2}$")
-    classroom: str = Field(default="Room 302")
+    classroom: Optional[str] = Field(default="Unassigned")
     section: str = Field(default="A")
     batch_year: str = Field(default="2023-2027")
     is_recurring: bool = True
@@ -117,7 +117,8 @@ class TeacherDashboardStats(BaseModel):
 
 class TakePeriodAttendanceRequest(BaseModel):
     timetable_id: int
-    image_base64: str
+    image_base64: Optional[str] = None
+    camera_id: Optional[int] = None
     date: Optional[str] = None  # YYYY-MM-DD, defaults to today
     period_number: Optional[int] = None
 

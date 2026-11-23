@@ -1,3 +1,4 @@
+import os
 import cv2
 import time
 import threading
@@ -7,6 +8,9 @@ from typing import Dict, Any, Generator, Optional, Tuple
 from app.core.logging import logger
 from app.models.cctv import Camera, CrossingDirection
 
+# Force TCP transport and fast 2-second timeout for RTSP to prevent socket hangs on local networks
+os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp|stimeout;2000000"
+
 class CCTVStreamManager:
     """Manages active camera stream captures, diagnostics, and overlays."""
 
@@ -15,7 +19,7 @@ class CCTVStreamManager:
         self._lock = threading.Lock()
 
     def _open_capture(self, stream_url: str) -> Optional[cv2.VideoCapture]:
-        """Safely open VideoCapture for RTSP or HTTP IP cameras. Avoid locking local device 0 so browser can use webcam."""
+        """Safely open VideoCapture for RTSP or HTTP IP cameras with fast 1.5s timeout."""
         try:
             clean_url = str(stream_url).strip().lower()
             # Do NOT lock local hardware device 0 in Python process - leave it available for client-side webcam
@@ -23,13 +27,35 @@ class CCTVStreamManager:
                 return None
             
             if stream_url.startswith("rtsp://") or stream_url.startswith("http://") or stream_url.startswith("https://"):
-                cap = cv2.VideoCapture(stream_url)
+                params = [
+                    cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 1500,
+                    cv2.CAP_PROP_READ_TIMEOUT_MSEC, 1500
+                ]
+                cap = cv2.VideoCapture(stream_url, cv2.CAP_FFMPEG, params)
                 if cap.isOpened():
                     return cap
             return None
         except Exception as exc:
             logger.error(f"Error opening camera stream {stream_url}: {exc}")
             return None
+
+    def capture_frame(self, camera: Camera) -> Tuple[bool, np.ndarray]:
+        """Capture a live frame from physical RTSP/HTTP camera or fall back to synthetic."""
+        clean_url = str(camera.stream_url).strip().lower()
+        if clean_url not in ["demo", "test", "simulated", "mock", "0", "webcam"]:
+            cap = self._open_capture(camera.stream_url)
+            if cap is not None:
+                try:
+                    ret, frame = cap.read()
+                    if ret and frame is not None:
+                        return True, frame
+                except Exception as e:
+                    logger.warning(f"Error reading frame from {camera.name}: {e}")
+                finally:
+                    cap.release()
+        
+        # Fall back to high-fidelity synthetic classroom frame
+        return False, self.generate_synthetic_frame(camera.name, camera.classroom, camera.crossing_direction)
 
     def test_connection(self, camera: Camera) -> Dict[str, Any]:
         """Test stream connectivity, calculate latency, frame dimensions, and FPS."""
@@ -77,59 +103,74 @@ class CCTVStreamManager:
         }
 
     def generate_synthetic_frame(self, camera_name: str, classroom: str, crossing_dir: str) -> np.ndarray:
-        """Generate a realistic synthetic classroom CCTV frame for testing when cameras are offline."""
+        """Generate a neutral, clean surveillance monitor standby screen when cameras are awaiting RTSP signal."""
         width, height = 960, 540
-        frame = np.zeros((height, width, 3), dtype=np.uint8)
-        
-        # Classroom floor & wall gradient (Modern Lecture Hall)
-        frame[0:300, :] = [35, 30, 25]     # Wall & Whiteboard Area
-        frame[300:, :] = [50, 45, 40]      # Classroom Seating Floor
-        
-        # Whiteboard
-        cv2.rectangle(frame, (180, 50), (width - 180, 220), (220, 220, 220), -1)
-        cv2.rectangle(frame, (180, 50), (width - 180, 220), (100, 100, 100), 3)
-        cv2.putText(frame, "CS701: ARTIFICIAL INTELLIGENCE & MACHINE LEARNING", (220, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (30, 30, 30), 2)
-        cv2.putText(frame, "Department of Computer Science & Engineering - Section B (Sem 7)", (240, 160), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (80, 80, 80), 1)
+        # Dark security monitor canvas
+        frame = np.full((height, width, 3), (18, 14, 11), dtype=np.uint8)
 
-        # Draw 3 Rows of Seated Desks (In-Classroom Seating Layout)
-        rows_y = [320, 420, 520]
-        for row_idx, ry in enumerate(rows_y):
-            for col in range(5):
-                dx = 80 + col * 170
-                # Desk
-                cv2.rectangle(frame, (dx, ry), (dx + 130, ry + 50), (80, 70, 60), -1)
-                cv2.rectangle(frame, (dx, ry), (dx + 130, ry + 50), (120, 110, 100), 2)
-                # Seated student head & shoulders
-                cv2.circle(frame, (dx + 65, ry - 20), 18, (160, 140, 120), -1)
-                cv2.ellipse(frame, (dx + 65, ry + 5), (28, 16), 0, 0, 180, (100, 140, 200), -1)
+        # Subtle grid lines
+        for y in range(60, height - 40, 60):
+            cv2.line(frame, (0, y), (width, y), (28, 22, 18), 1)
+        for x in range(60, width, 80):
+            cv2.line(frame, (x, 40), (x, height - 32), (28, 22, 18), 1)
 
-        # AI Detection Reticle on Student (Kushal VR - Front Row Center)
-        target_x, target_y = 420, 300
-        cv2.rectangle(frame, (target_x - 30, target_y - 45), (target_x + 30, target_y + 15), (0, 255, 120), 2)
-        cv2.putText(frame, "Kushal VR (1EW23CS065) - 99.8%", (target_x - 70, target_y - 52), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 255, 120), 1)
+        # Center Status Card
+        cx, cy = width // 2, height // 2
+        card_w, card_h = 560, 180
+        cv2.rectangle(frame, (cx - card_w // 2, cy - card_h // 2), (cx + card_w // 2, cy + card_h // 2), (26, 20, 16), -1)
+        cv2.rectangle(frame, (cx - card_w // 2, cy - card_h // 2), (cx + card_w // 2, cy + card_h // 2), (55, 45, 38), 1)
+
+        # Corner reticles
+        ret_size = 18
+        for sx, sy in [
+            (cx - card_w // 2, cy - card_h // 2),
+            (cx + card_w // 2, cy - card_h // 2),
+            (cx - card_w // 2, cy + card_h // 2),
+            (cx + card_w // 2, cy + card_h // 2)
+        ]:
+            dx = ret_size if sx < cx else -ret_size
+            dy = ret_size if sy < cy else -ret_size
+            cv2.line(frame, (sx, sy), (sx + dx, sy), (56, 189, 248), 2)
+            cv2.line(frame, (sx, sy), (sx, sy + dy), (56, 189, 248), 2)
+
+        # Center Status Text
+        cv2.circle(frame, (cx - 190, cy - 25), 8, (0, 165, 255), -1)
+        cv2.putText(frame, "CCTV SURVEILLANCE FEED STANDBY", (cx - 165, cy - 18), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 255), 2)
+        cv2.putText(frame, f"Target Camera: {camera_name}", (cx - 165, cy + 12), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (200, 200, 200), 1)
+        cv2.putText(frame, f"Assigned Location: {classroom or 'Unassigned'}", (cx - 165, cy + 34), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (160, 160, 160), 1)
+        cv2.putText(frame, "Connecting to RTSP IP stream... (Verify IP & RTSP server)", (cx - 165, cy + 58), cv2.FONT_HERSHEY_SIMPLEX, 0.40, (100, 180, 255), 1)
 
         # Top HUD Bar
         cv2.rectangle(frame, (0, 0), (width, 42), (15, 23, 42), -1)
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        cv2.putText(frame, f"CAM: {camera_name} | {classroom} | {now_str}", (15, 26), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (255, 255, 255), 1)
-        cv2.circle(frame, (width - 30, 21), 6, (0, 255, 0), -1)
-        cv2.putText(frame, "LIVE", (width - 70, 26), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 0), 1)
+        cv2.putText(frame, f"CAM: {camera_name} | {classroom or 'SURVEILLANCE GRID'} | {now_str}", (15, 26), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (255, 255, 255), 1)
+        cv2.circle(frame, (width - 30, 21), 6, (0, 165, 255), -1)
+        cv2.putText(frame, "STANDBY", (width - 95, 26), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 165, 255), 1)
 
         # Bottom In-Classroom Status Bar
         cv2.rectangle(frame, (0, height - 32), (width, height), (15, 23, 42), -1)
-        cv2.putText(frame, "IN-CLASSROOM WIDE-ANGLE OVERVIEW • PERIOD ATTENDANCE: ACTIVE SCANNING", (20, height - 12), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (56, 189, 248), 1)
+        cv2.putText(frame, "INSTITUTIONAL CCTV EDGE NETWORK • RTSP INGESTION ACTIVE", (20, height - 12), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (56, 189, 248), 1)
 
         return frame
 
-    def apply_stream_overlay(self, frame: np.ndarray, camera: Camera, recognized_faces: Optional[list] = None) -> np.ndarray:
+    def apply_stream_overlay(
+        self,
+        frame: np.ndarray,
+        camera: Camera,
+        recognized_faces: Optional[list] = None,
+        detected_faces: Optional[list] = None,
+        raw_faces: Optional[np.ndarray] = None
+    ) -> np.ndarray:
         """Apply high-tech in-classroom security HUD and recognized student tags."""
         h, w = frame.shape[:2]
         
         # Classroom Overview Tag
-        cv2.rectangle(frame, (10, 10), (360, 38), (15, 23, 42), -1)
-        cv2.putText(frame, f"CLASSROOM OVERVIEW • {camera.classroom}", (18, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (56, 189, 248), 1)
+        cv2.rectangle(frame, (10, 10), (380, 38), (15, 23, 42), -1)
+        face_count = len(detected_faces) if detected_faces else (len(recognized_faces) if recognized_faces else 0)
+        status_text = f"CCTV AI VISION • {camera.classroom} • {face_count} FACES"
+        cv2.putText(frame, status_text, (18, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (56, 189, 248), 1)
 
-        # Recognized student bounding boxes
+        # 1. Recognized student bounding boxes (with names and percentages)
         if recognized_faces:
             for item in recognized_faces:
                 x, y, bw, bh = item.get("bounding_box", (0, 0, 0, 0))
@@ -139,10 +180,55 @@ class CCTVStreamManager:
                 
                 color = (0, 50, 255) if is_spoof else (0, 255, 100) if conf > 0.70 else (0, 180, 255)
                 cv2.rectangle(frame, (x, y), (x + bw, y + bh), color, 2)
+                cl = min(15, bw // 4)
+                cv2.line(frame, (x, y), (x + cl, y), (255, 255, 255), 2)
+                cv2.line(frame, (x, y), (x, y + cl), (255, 255, 255), 2)
+                cv2.line(frame, (x + bw, y), (x + bw - cl, y), (255, 255, 255), 2)
+                cv2.line(frame, (x + bw, y), (x + bw, y + cl), (255, 255, 255), 2)
+                cv2.line(frame, (x, y + bh), (x + cl, y + bh), (255, 255, 255), 2)
+                cv2.line(frame, (x, y + bh), (x, y + bh - cl), (255, 255, 255), 2)
+                cv2.line(frame, (x + bw, y + bh), (x + bw - cl, y + bh), (255, 255, 255), 2)
+                cv2.line(frame, (x + bw, y + bh), (x + bw, y + bh - cl), (255, 255, 255), 2)
                 
                 label = f"SPOOF ALERT" if is_spoof else f"{name} ({int(conf*100)}%)"
                 cv2.rectangle(frame, (x, y - 22), (x + len(label)*9, y), color, -1)
                 cv2.putText(frame, label, (x + 4, y - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
+
+        # 2. Live RTSP Detected Face Bounding Boxes & Facial Landmark Reticles
+        elif detected_faces:
+            for i, (x, y, bw, bh) in enumerate(detected_faces):
+                color = (0, 255, 128)  # Bright cyber green
+                cv2.rectangle(frame, (x, y), (x + bw, y + bh), color, 2)
+                
+                # Tech Corner Brackets
+                cl = max(10, min(18, bw // 4))
+                cv2.line(frame, (x, y), (x + cl, y), (255, 255, 255), 3)
+                cv2.line(frame, (x, y), (x, y + cl), (255, 255, 255), 3)
+                cv2.line(frame, (x + bw, y), (x + bw - cl, y), (255, 255, 255), 3)
+                cv2.line(frame, (x + bw, y), (x + bw, y + cl), (255, 255, 255), 3)
+                cv2.line(frame, (x, y + bh), (x + cl, y + bh), (255, 255, 255), 3)
+                cv2.line(frame, (x, y + bh), (x, y + bh - cl), (255, 255, 255), 3)
+                cv2.line(frame, (x + bw, y + bh), (x + bw - cl, y + bh), (255, 255, 255), 3)
+                cv2.line(frame, (x + bw, y + bh), (x + bw, y + bh - cl), (255, 255, 255), 3)
+
+                # Floating tag
+                label = f"AI VISION: HUMAN FACE DETECTED"
+                tag_w = len(label) * 8
+                cv2.rectangle(frame, (x, max(0, y - 20)), (x + tag_w, max(20, y)), (15, 23, 42), -1)
+                cv2.rectangle(frame, (x, max(0, y - 20)), (x + tag_w, max(20, y)), color, 1)
+                cv2.putText(frame, label, (x + 4, max(14, y - 5)), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (0, 255, 128), 1)
+
+            # Draw landmarks if available
+            if raw_faces is not None and len(raw_faces) > 0:
+                for row in raw_faces:
+                    if len(row) >= 14:
+                        re = (int(row[4]), int(row[5]))
+                        le = (int(row[6]), int(row[7]))
+                        nt = (int(row[8]), int(row[9]))
+                        rc = (int(row[10]), int(row[11]))
+                        lc = (int(row[12]), int(row[13]))
+                        for pt in [re, le, nt, rc, lc]:
+                            cv2.circle(frame, pt, 2, (0, 255, 255), -1)
 
         # Top status bar
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -150,8 +236,12 @@ class CCTVStreamManager:
         return frame
 
     def stream_video(self, camera: Camera) -> Generator[bytes, None, None]:
-        """Generate MJPEG video stream chunks for FastAPI StreamingResponse."""
+        """Generate MJPEG video stream chunks for FastAPI StreamingResponse with real-time face detection overlay."""
+        from app.services.biometric_service import detect_faces_detailed
         cap = self._open_capture(camera.stream_url)
+        cached_faces = []
+        cached_yunet = None
+        frame_idx = 0
         try:
             while True:
                 if cap is not None and cap.isOpened():
@@ -159,7 +249,14 @@ class CCTVStreamManager:
                     if not ret or frame is None:
                         frame = self.generate_synthetic_frame(camera.name, camera.classroom, camera.crossing_direction)
                     else:
-                        frame = self.apply_stream_overlay(frame, camera)
+                        frame_idx += 1
+                        # Run detection every 3 frames for ultra-smooth performance (~8 detections/sec at 25 FPS)
+                        if frame_idx % 3 == 0 or not cached_faces:
+                            try:
+                                cached_faces, cached_yunet = detect_faces_detailed(frame)
+                            except Exception:
+                                pass
+                        frame = self.apply_stream_overlay(frame, camera, detected_faces=cached_faces, raw_faces=cached_yunet)
                 else:
                     frame = self.generate_synthetic_frame(camera.name, camera.classroom, camera.crossing_direction)
 

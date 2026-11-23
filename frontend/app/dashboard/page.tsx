@@ -54,67 +54,6 @@ function getCurvedPath(points: { x: number; y: number }[]): string {
   return d;
 }
 
-// --- COLLEGE-WIDE CAMPUS DATASETS (AGGREGATED ACROSS ALL DEPARTMENTS) ---
-const CAMPUS_CHART_DATA = {
-  Today: {
-    labels: ["P1 (9AM)", "P2 (10AM)", "P3 (11AM)", "P4 (1PM)", "P5 (2PM)", "P6 (3PM)"],
-    periodNames: [
-      "Period 1 (09:00 AM) • Campus Morning Opening & Core Lectures",
-      "Period 2 (10:00 AM) • Department Specializations & Labs",
-      "Period 3 (11:15 AM) • Mid-Day Lecture Sessions",
-      "Period 4 (01:00 PM) • Post-Lunch Academic Sessions",
-      "Period 5 (02:00 PM) • Practical & Laboratory Workstations",
-      "Period 6 (03:00 PM) • Technical Seminars & Project Labs",
-    ],
-    // SVG Y-coordinates (scaled for 160px height)
-    // 92-96% attendance = y: 30-40, 80-88% = y: 55-65
-    present: [38, 30, 42, 34, 48, 36],
-    ingests: [35, 28, 40, 32, 45, 33],
-    late: [128, 140, 124, 134, 118, 132],
-    rawValues: {
-      present: ["92.4% Campus Present", "95.1% Campus Present", "90.8% Campus Present", "93.6% Campus Present", "88.5% Campus Present", "92.0% Campus Present"],
-      ingests: ["1,420 CCTV Ingests", "1,580 CCTV Ingests", "1,390 CCTV Ingests", "1,495 CCTV Ingests", "1,310 CCTV Ingests", "1,440 CCTV Ingests"],
-      late: ["38 Absent / Excused", "22 Absent / Excused", "46 Absent / Excused", "32 Absent / Excused", "58 Absent / Excused", "40 Absent / Excused"],
-    },
-  },
-  Weekly: {
-    labels: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat"],
-    periodNames: [
-      "Monday (All Departments • 48 Lectures)",
-      "Tuesday (All Departments • 52 Lectures)",
-      "Wednesday (All Departments • 50 Lectures)",
-      "Thursday (All Departments • 46 Lectures)",
-      "Friday (All Departments • 48 Lectures)",
-      "Saturday (Labs & Seminars • 24 Sessions)",
-    ],
-    present: [40, 32, 35, 30, 45, 75],
-    ingests: [38, 30, 33, 28, 42, 70],
-    late: [126, 138, 132, 142, 120, 95],
-    rawValues: {
-      present: ["91.5% Avg Campus", "94.8% Avg Campus", "93.2% Avg Campus", "95.6% Avg Campus", "89.4% Avg Campus", "76.2% Avg Campus"],
-      ingests: ["8,640 Ingests", "9,120 Ingests", "8,950 Ingests", "9,340 Ingests", "8,400 Ingests", "4,820 Ingests"],
-      late: ["42 Avg Absences", "26 Avg Absences", "34 Avg Absences", "22 Avg Absences", "52 Avg Absences", "118 Avg Absences"],
-    },
-  },
-  Monthly: {
-    labels: ["Week 1", "Week 2", "Week 3", "Week 4"],
-    periodNames: [
-      "Week 1 (Institutional Academic Term Opening)",
-      "Week 2 (Full Timetable Schedule & CCTV Monitoring)",
-      "Week 3 (Mid-Semester Assessments & Practical Ingests)",
-      "Week 4 (Departmental Reviews & Attendance Audits)",
-    ],
-    present: [42, 34, 38, 30],
-    ingests: [40, 31, 36, 28],
-    late: [124, 136, 130, 142],
-    rawValues: {
-      present: ["90.8% Campus Attendance", "94.2% Campus Attendance", "92.5% Campus Attendance", "95.8% Campus Attendance"],
-      ingests: ["44,200 Total Face Ingests", "47,800 Total Face Ingests", "46,100 Total Face Ingests", "48,900 Total Face Ingests"],
-      late: ["142 Shortage Alerts", "88 Shortage Alerts", "112 Shortage Alerts", "64 Shortage Alerts"],
-    },
-  },
-};
-
 interface AdminOverviewData {
   institution_name: string;
   total_students: number;
@@ -131,6 +70,27 @@ interface AdminOverviewData {
   pending_biometric_students: number;
   attendance_rate: number;
   present_today: number;
+  chart_data?: Record<string, {
+    labels: string[];
+    periodNames: string[];
+    present: number[];
+    ingests: number[];
+    late: number[];
+    rawValues: {
+      present: string[];
+      ingests: string[];
+      late: string[];
+    };
+  }>;
+  verification_breakdown?: {
+    id: string;
+    name: string;
+    value: string;
+    numeric: number;
+    percent: number;
+    color: string;
+    description: string;
+  }[];
 }
 
 export default function DashboardPage() {
@@ -139,23 +99,23 @@ export default function DashboardPage() {
   const [selectedCourse, setSelectedCourse] = useState<string>("All Courses");
 
 
-  // College-Wide Overview State (Direct from Admin Overview API)
+  // College-Wide Overview State (Direct from Real Database)
   const [overview, setOverview] = useState<AdminOverviewData>({
     institution_name: "University Institute of Technology & Engineering",
-    total_students: 840,
-    total_faculty: 48,
-    total_subjects: 36,
-    total_cameras: 12,
-    active_cameras: 12,
-    total_classrooms: 18,
-    classrooms: ["Room 101", "Room 201", "Room 301", "Room 302", "Lab 1", "Lab 2"],
-    total_departments: 5,
-    departments: ["Computer Science", "Information Science", "Electronics & Comm.", "Mechanical Eng.", "Civil Eng."],
-    total_timetable_slots: 64,
-    biometric_enrolled_students: 790,
-    pending_biometric_students: 50,
-    attendance_rate: 91.8,
-    present_today: 771,
+    total_students: 0,
+    total_faculty: 0,
+    total_subjects: 0,
+    total_cameras: 0,
+    active_cameras: 0,
+    total_classrooms: 0,
+    classrooms: [],
+    total_departments: 0,
+    departments: [],
+    total_timetable_slots: 0,
+    biometric_enrolled_students: 0,
+    pending_biometric_students: 0,
+    attendance_rate: 0,
+    present_today: 0,
   });
   const [loadingOverview, setLoadingOverview] = useState(true);
 
@@ -180,21 +140,7 @@ export default function DashboardPage() {
         });
         if (res.ok) {
           const data: AdminOverviewData = await res.json();
-          setOverview((prev) => ({
-            ...prev,
-            ...data,
-            // Ensure sensible minimums for campus presentation
-            total_students: data.total_students > 0 ? data.total_students : prev.total_students,
-            total_faculty: data.total_faculty > 0 ? data.total_faculty : prev.total_faculty,
-            total_cameras: data.total_cameras > 0 ? data.total_cameras : prev.total_cameras,
-            active_cameras: data.active_cameras > 0 ? data.active_cameras : prev.active_cameras,
-            total_classrooms: data.total_classrooms > 0 ? data.total_classrooms : prev.total_classrooms,
-            total_departments: data.total_departments > 0 ? data.total_departments : prev.total_departments,
-            biometric_enrolled_students:
-              data.biometric_enrolled_students > 0 ? data.biometric_enrolled_students : prev.biometric_enrolled_students,
-            attendance_rate: data.attendance_rate > 0 ? data.attendance_rate : prev.attendance_rate,
-            present_today: data.present_today > 0 ? data.present_today : prev.present_today,
-          }));
+          setOverview(data);
         }
       } catch {
         // Fallback default is already set
@@ -217,7 +163,20 @@ export default function DashboardPage() {
   const [hoverCoords, setHoverCoords] = useState<{ x: number; y: number } | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
 
-  const currentDataset = CAMPUS_CHART_DATA[timeframe];
+  const fallbackDataset = {
+    labels: timeframe === "Today" ? ["P1 (9AM)", "P2 (10AM)", "P3 (11AM)", "P4 (1PM)", "P5 (2PM)", "P6 (3PM)"] : timeframe === "Weekly" ? ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] : ["Week 1", "Week 2", "Week 3", "Week 4"],
+    periodNames: [],
+    present: [145, 145, 145, 145, 145, 145],
+    ingests: [145, 145, 145, 145, 145, 145],
+    late: [145, 145, 145, 145, 145, 145],
+    rawValues: {
+      present: ["0% Present", "0% Present", "0% Present", "0% Present", "0% Present", "0% Present"],
+      ingests: ["0 Ingests", "0 Ingests", "0 Ingests", "0 Ingests", "0 Ingests", "0 Ingests"],
+      late: ["0 Absent", "0 Absent", "0 Absent", "0 Absent", "0 Absent", "0 Absent"],
+    },
+  };
+
+  const currentDataset = (overview.chart_data && overview.chart_data[timeframe]) || fallbackDataset;
   const numPoints = currentDataset.labels.length;
   const svgWidth = 600;
   const svgHeight = 160;
@@ -289,35 +248,38 @@ export default function DashboardPage() {
   const [activePieIndex, setActivePieIndex] = useState<number | null>(null);
 
   // Institutional Verification Channels Breakdown
-  const campusChannelSlices = [
-    {
-      id: "biometric",
-      name: "Automated CCTV Face Recognition",
-      value: "88%",
-      numeric: 88,
-      percent: 0.88,
-      color: "#10b981",
-      description: "Passive camera detection across lecture halls & labs",
-    },
-    {
-      id: "barcode",
-      name: "Campus Gateway & Kiosk Terminals",
-      value: "9%",
-      numeric: 9,
-      percent: 0.09,
-      color: "#2563eb",
-      description: "Library and main gate smart card scanners",
-    },
-    {
-      id: "manual",
-      name: "Faculty Administrative Override",
-      value: "3%",
-      numeric: 3,
-      percent: 0.03,
-      color: "#f59e0b",
-      description: "Authorized medical duty & official sports exemptions",
-    },
-  ];
+  const campusChannelSlices =
+    overview.verification_breakdown && overview.verification_breakdown.length > 0
+      ? overview.verification_breakdown
+      : [
+          {
+            id: "biometric",
+            name: "Automated CCTV Face Recognition",
+            value: "100%",
+            numeric: 100,
+            percent: 1.0,
+            color: "#10b981",
+            description: "Passive camera detection across lecture halls & labs",
+          },
+          {
+            id: "barcode",
+            name: "Campus Gateway & Kiosk Terminals",
+            value: "0%",
+            numeric: 0,
+            percent: 0.0,
+            color: "#2563eb",
+            description: "Library and main gate smart card scanners",
+          },
+          {
+            id: "manual",
+            name: "Faculty Administrative Override",
+            value: "0%",
+            numeric: 0,
+            percent: 0.0,
+            color: "#f59e0b",
+            description: "Authorized medical duty & official sports exemptions",
+          },
+        ];
 
   // Campus Edge Inference Latency Breakdown
   const campusLatencySlices = [
@@ -620,7 +582,7 @@ export default function DashboardPage() {
               <div className="flex items-center gap-2">
                 <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />
                 <span className="text-slate-800 font-bold">
-                  {overview.active_cameras} / {overview.total_cameras || 12} Nodes Active
+                  {overview.active_cameras} / {overview.total_cameras} Nodes Active
                 </span>
               </div>
               <span className="font-bold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full text-[10px]">

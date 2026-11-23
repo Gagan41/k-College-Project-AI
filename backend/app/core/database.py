@@ -1,3 +1,4 @@
+import os
 import time
 from typing import Generator, Dict, Any
 from sqlalchemy import create_engine, text
@@ -29,7 +30,8 @@ try:
         conn.execute(text("SELECT 1"))
 except Exception as e:
     logger.warning(f"Unable to connect to primary database ({settings.DATABASE_URL}): {e}. Falling back to SQLite dev database.")
-    engine = create_engine("sqlite:///./attendance.db", connect_args={"check_same_thread": False})
+    root_db = os.path.join(settings.ROOT_DIR, "attendance.db").replace("\\", "/")
+    engine = create_engine(f"sqlite:///{root_db}", connect_args={"check_same_thread": False})
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()

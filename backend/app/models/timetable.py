@@ -27,14 +27,14 @@ class Timetable(Base, TimestampMixin):
     __tablename__ = "timetables"
 
     subject_id = Column(Integer, ForeignKey("subjects.id", ondelete="CASCADE"), nullable=False, index=True)
-    faculty_id = Column(Integer, ForeignKey("faculty.id", ondelete="CASCADE"), nullable=False, index=True)
+    faculty_id = Column(Integer, ForeignKey("faculty.id", ondelete="SET NULL"), nullable=True, index=True)
     camera_id = Column(Integer, ForeignKey("cameras.id", ondelete="SET NULL"), nullable=True)
     
     day_of_week = Column(String(20), nullable=False)  # Monday, Tuesday, etc.
     period_number = Column(Integer, default=1, nullable=False)  # Period 1 to 6
     start_time = Column(String(10), nullable=False)  # "13:00"
     end_time = Column(String(10), nullable=False)    # "14:00"
-    classroom = Column(String(100), default="Room 302", nullable=False)
+    classroom = Column(String(100), default="Unassigned", nullable=True)
     
     section = Column(String(10), default="A", nullable=False)
     batch_year = Column(String(20), default="2023-2027", nullable=False)
